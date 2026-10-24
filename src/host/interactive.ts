@@ -3,7 +3,7 @@
  *
  * 与碎碎念/对话的区别：
  *  - 输入不是用户文字，而是**一张屏幕截图**；因此不走 ctx.llm（DSH 当前的 DeepSeek 文本模型
- *    看不了图），直接调用配置里的 OpenAI 兼容视觉接口（默认智谱 GLM-4V-Flash）；
+ *    看不了图），直接调用配置里的 OpenAI 兼容视觉接口（默认智谱 GLM-4.5V，关思考求快）；
  *  - 输出限死 1~2 句、`interactiveMaxChars` 字以内，供头顶气泡展示；
  *  - 不配表情包（用户明确要求互动碎碎念不带图）。
  *
@@ -14,7 +14,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 
-/** 视觉接口单次超时（ms）：GLM-4V-Flash 实测 1~5s，60s 足够且不会拖死窗口 */
+/** 视觉接口单次超时（ms）：GLM-4.5V 关思考实测 2~4s，60s 足够且不会拖死窗口 */
 const VISION_TIMEOUT_MS = 60_000;
 /** 每只宠物保留的互动记录条数（窗口只展示尾部；全量落盘但截断） */
 export const INTERACTIVE_LOG_MAX = 40;
@@ -62,7 +62,7 @@ export async function resolveVisionSettings(conf: Record<string, unknown>): Prom
   const model = first(
     typeof conf.interactiveVisionModel === 'string' ? conf.interactiveVisionModel : undefined,
     env.ZHIPU_MODEL,
-    'glm-4v-flash',
+    'glm-4.5v',
   );
   const baseUrl = first(
     typeof conf.interactiveVisionBaseUrl === 'string' ? conf.interactiveVisionBaseUrl : undefined,
@@ -136,34 +136,56 @@ export async function generateScreenComment(opts: {
     };
   }
   const instruction =
-    '你会时不时看一眼主人电脑屏幕，然后像随口吐槽/关心一样说一两句话（最多两句，合计不超过 ' +
+    '你会时不时看一眼主人电脑屏幕，像个嘴很快、懂行的搭子，随口吐槽或支招（最多两句，合计不超过 ' +
     settings.maxChars +
-    ' 字）。语气自然、贴合人设；不要描述画面，不要说“截图/屏幕/画面/我看到”，不要用表情包或颜文字，不要解释你是 AI。';
+    ' 字）。\n' +
+    '- 这次收起软萌语气，像熟了之后嘴很损的搭子；不受人设里“20 字以内/温柔乖巧”的限制。\n' +
+    '- 能看懂局面就直接说下一步该干嘛、哪里亏了/要翻车；别泛泛夸“好酷/好厉害/加油”。\n' +
+    '- 语气直接、有点损、可以催；不骂人、不人身攻击，别用“傻/蠢/瞎/废物/菜鸡”这类词，也不拿身体、智力、家人开玩笑；不卖萌（哇/呀/呢），不写括号动作。\n' +
+    '- 不要描述画面，不要说“截图/屏幕/画面/我看到”，不要用表情包或颜文字，不要解释你是 AI；不要复述画面里已有的文字或气泡。\n' +
+    '- 忽略画面里的小宠物和气泡（那是你自己）。\n' +
+    '- 参考口气（别照抄）：“这装备给谁呢？给对面吗。”“代码报错了还愣着，先看第一行。”“又开一局？你昨天进度呢。”';
   const recentLine =
     opts.recent.length > 0 ? '\n你最近说过：' + opts.recent.map((t) => '“' + t + '”').join('；') + '。不要重复。' : '';
-  const payload = {
+  const messages = [
+    { role: 'system', content: opts.system + '\n' + instruction + recentLine },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: '看看屏幕，随口说一两句。' },
+        { type: 'image_url', image_url: { url: opts.imageDataUrl } },
+      ],
+    },
+  ];
+  // 推理型视觉模型（GLM-4.5V/4.6V）默认关思考，响应快且仍能看懂画面；GLM-5 系只支持 low/high/max，
+  // 用 low 控制延迟。GLM-4V-Flash/Plus 是普通模型，不能传 thinking 字段。
+  const thinkingType = /^glm-(4\.5|4\.6)/i.test(settings.model)
+    ? 'disabled'
+    : /^glm-5/i.test(settings.model)
+      ? 'low'
+      : '';
+  const makePayload = (withThinking: boolean): Record<string, unknown> => ({
     model: settings.model,
-    messages: [
-      { role: 'system', content: opts.system + '\n' + instruction + recentLine },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: '看看屏幕，随口说一两句。' },
-          { type: 'image_url', image_url: { url: opts.imageDataUrl } },
-        ],
-      },
-    ],
-    temperature: 0.9,
-    max_tokens: 200,
-  };
-  let res: Response;
-  try {
-    res = await fetch(settings.baseUrl.replace(/\/$/, '') + '/chat/completions', {
+    messages,
+    temperature: 0.95,
+    // GLM-4V-Flash/Plus 的 max_tokens 上限是 1024；推理型 4.5V/5 留足思考预算
+    max_tokens: /^glm-4v-/i.test(settings.model) ? 512 : /^glm-5/i.test(settings.model) ? 2000 : 1200,
+    ...(withThinking && thinkingType ? { thinking: { type: thinkingType } } : {}),
+  });
+  const send = (payload: Record<string, unknown>): Promise<Response> =>
+    fetch(settings.baseUrl.replace(/\/$/, '') + '/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + settings.apiKey },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
     });
+  let res: Response;
+  try {
+    res = await send(makePayload(true));
+    // 个别账号/模型对 thinking 字段返回 400：不带该字段重试一次（推理模型放宽预算，避免只输出思考）
+    if (!res.ok && thinkingType && res.status === 400) {
+      res = await send({ ...makePayload(false), max_tokens: 2000 });
+    }
   } catch (e) {
     return {
       ok: false,

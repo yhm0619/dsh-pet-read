@@ -24,12 +24,12 @@
   // ===================== 互动碎碎念（右键菜单「碎碎念 → 互动碎碎念」） =====================
   // 每隔 interactiveIntervalSec 秒截一次屏，交给视觉模型随口吐槽 1~2 句（不带表情包），
   // 直接显示在宠物头顶的碎碎念气泡里。
-  // 视觉接口走 OpenAI 兼容协议（默认智谱 GLM-4V-Flash）；API Key 只从环境变量或下面的 .env 读取，
+  // 视觉接口走 OpenAI 兼容协议（默认智谱 GLM-4.5V，关思考求快；可改 glm-4v-flash 走免费模型）；API Key 只从环境变量或下面的 .env 读取，
   // 不会写进配置、也不会返回给客户端。聊天使用的人设仍是 whisperPrompt（同一套宠物人格）。
   // 注意：截图会把当前屏幕内容发送给视觉服务商；不想被看时右键再点一次「互动碎碎念」关掉。
   "interactiveIntervalSec": 30,
   "interactiveMaxChars": 60,
-  "interactiveVisionModel": "glm-4v-flash",
+  "interactiveVisionModel": "glm-4.5v",
   "interactiveVisionBaseUrl": "https://open.bigmodel.cn/api/paas/v4",
   // 存 ZHIPU_API_KEY / GLM_API_KEY / ZHIPU_MODEL 的 .env 文件（可选；留空则只用环境变量）
   "interactiveVisionEnvFile": "",

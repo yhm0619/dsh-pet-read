@@ -1,6 +1,6 @@
 # dsh-pet-read 🐾
 
-> **基于 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的「互动碎碎念」修改版**：保留原版全部桌宠能力，新增「碎碎念 → 互动碎碎念」——每 30 秒截一次主屏，交给视觉模型（默认智谱 GLM-4V-Flash）说出 1~2 句随口吐槽，直接显示在宠物头顶气泡里（不需要回复、不带表情包）。
+> **基于 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的「互动碎碎念」修改版**：保留原版全部桌宠能力，新增「碎碎念 → 互动碎碎念」——每 30 秒截一次主屏，交给视觉模型（默认智谱 GLM-4.5V）说出 1~2 句随口吐槽，直接显示在宠物头顶气泡里（不需要回复、不带表情包）。
 
 本仓库是 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的 fork，遵循 MIT 许可；原始版权归 PC2005-cloud 所有，修改部分版权归 yhm0619。**包名仍是 `dsh-pet`**，因此安装本仓库会替换同名的上游包。
 
@@ -40,7 +40,7 @@ dsh plugin --profile web add dsh-pet
 - **环境变量（推荐）**：启动 DSH 前设置 `ZHIPU_API_KEY`（PowerShell：`$env:ZHIPU_API_KEY="..."`）
 - **本地 `.env`**：把配置里的 `interactiveVisionEnvFile` 指到该文件，文件内写 `ZHIPU_API_KEY=...`
 
-仓库和默认配置都不包含 Key，`.env` 已被 `.gitignore` 排除。每 30 秒会把一张主屏截图发给智谱 GLM-4V-Flash；介意隐私时右键关掉「互动碎碎念」。
+仓库和默认配置都不包含 Key，`.env` 已被 `.gitignore` 排除。每 30 秒会把一张主屏截图发给智谱 GLM-4.5V；介意隐私时右键关掉「互动碎碎念」。
 
 > 💡 单一格式（默认 `.webm`）：浏览器 Chrome/Edge/Firefox 与桌面模式（Electron=Chromium）直接透明播放；Safari 不认 webm alpha（黑底），macOS 需要改用 `.mov`，见下方「🖥️ macOS 使用 mov」。
 
@@ -69,7 +69,7 @@ macOS 的 Safari/WKWebView 下透明动画需用 `.mov` 素材，三步：
 - **点击积分（0.2.5）**：飞行中的宠物被**按下**（速度 ≥ 400px/s）→ 点击处爆开粒子 + 弹出积分卡片；分数 = 速度/100 × 462/大小（线性，越快/越小分越高——小宠物目标小、更难命中，奖励更高）；静止/慢速点击维持普通点击回应动画（`prefers-reduced-motion` 时跳过粒子）
 - **多宠物碰撞（0.2.5）**：`petCollision: true` 开启后，飞行中的宠物撞到其它宠物按**动量守恒 + 恢复系数 0.995** 弹开（质量 ∝ size²，被撞方从落点以新初速抛出去），浏览器与桌面跨窗口同语义（默认关闭）
 - **碎碎念**：宠物时不时自己冒一句——按 `eventsRefreshSec.whisper` 周期（默认 300 秒）调用当前会话所用的模型生成（人设 = 全局 `whisperPrompt`，另追加一句名字声明），气泡展示 10 秒；右键菜单「碎碎念」可立即催一句（绕过节流，同一实例的多端一起看到）。**默认关闭**，按宠物开（`pets[].whisperEnabled`）
-- **互动碎碎念**：右键「碎碎念 → 互动碎碎念」开启识屏循环——每 `interactiveIntervalSec` 秒（默认 30）截一次屏，交给视觉模型（默认智谱 `glm-4v-flash`）随口吐槽 1~2 句（`interactiveMaxChars` 字以内，**不带表情包**），直接显示在宠物头顶的碎碎念气泡里（与普通碎碎念同一套展示/动画）。单向吐槽、不用回复；再次点「互动碎碎念（已开启）」关闭，切到「随机碎碎念」也会自动停掉。API Key 只从环境变量 `ZHIPU_API_KEY` / `interactiveVisionEnvFile` 指向的 `.env` 读取（不写进配置、不回传客户端），识屏历史落在 `$DSH_HOME/dsh-pet/interactive.json`（仅用于避免重复，不污染对话记忆）。仅桌面模式有静默截屏能力
+- **互动碎碎念**：右键「碎碎念 → 互动碎碎念」开启识屏循环——每 `interactiveIntervalSec` 秒（默认 30）截一次屏，交给视觉模型（默认智谱 `glm-4.5v`，关思考，2~4 秒响应）用偏犀利的搭子口吻吐槽 1~2 句（`interactiveMaxChars` 字以内，**不带表情包**），直接显示在宠物头顶的碎碎念气泡里（与普通碎碎念同一套展示/动画）。单向吐槽、不用回复；再次点「互动碎碎念（已开启）」关闭，切到「随机碎碎念」也会自动停掉。API Key 只从环境变量 `ZHIPU_API_KEY` / `interactiveVisionEnvFile` 指向的 `.env` 读取（不写进配置、不回传客户端），识屏历史落在 `$DSH_HOME/dsh-pet/interactive.json`（仅用于避免重复，不污染对话记忆）。仅桌面模式有静默截屏能力
 - **对话**：右键「对话」弹窗跟宠物聊天，也能用 `/chat <消息>` 命令（留空 = 催一句碎碎念）——记忆持久化在 `$DSH_HOME/dsh-pet/memory.json`（**全存不删**，每次请求只带最近 `chatMemoryRounds` 轮），浏览器与桌面共享同一份记忆；对话目标为 `/pet` 选中的那只，未选则取列表第一只
 - **表情包配图（0.2.9）**：气泡可以带一张表情包——碎碎念**随机抽 1 张**（`whisperImageEnabled`：只是把这张图的描述加进同一次请求，约 +100 字符 / ≈60 token，增量可忽略）；对话把**整张清单**交给模型按语境选（`chatImageEnabled`：每条消息约 +1.1k 字符 / ≈650 token，约碎碎念配图的 11 倍，随图片数量线性增长）。图片与描述的映射在 `memes`（键 = 包内 `assets/memes/<键>.png`），两个开关默认都关
 - **右键级联菜单**：右键宠物弹出（桌面与浏览器共用同一份组件，`src/shared/menu.ts`）——桌面端根项「**打开网站** / **查看余额** / **回到初始位置** + **动作**」、浏览器端「**回到初始位置** + **动作**」；「打开网站」用**系统默认浏览器**打开 DSH 网站（等效网页里 Ctrl+点击链接）；「查看余额」立即拉余额弹气泡播档位动画（与周期触发同一展示路径）；「回到初始位置」停漫游回配置角落；「碎碎念」子菜单 = **随机碎碎念**（原手动催一句）/ **互动碎碎念**（开启识屏吐槽循环，结果显示在头顶气泡）；**动作 → 分类 → 具体动画**（分类 = 待机/转向/拖拽/点击回应/移动/随机动作分类/余额档位；**点播「移动」分类动画会真实行走一段**——边界检查/随机距离/起停时段与随机移动完全一致；noMirror 文字类朝右时自动强制朝左）——浏览器端只在宠物命中区拦截右键（`preventDefault`），完全不进入/改动 DSH 页面自己的菜单
@@ -124,7 +124,7 @@ macOS 的 Safari/WKWebView 下透明动画需用 `.mov` 素材，三步：
 | `chatImageEnabled`（0.2.9）    | 对话配图总开关（布尔，默认关）：开启后把**整张** `memes` 清单交给模型**按语境选 1 张**（可不选；选了池外名称视为没选并剥掉标记）。token：每条消息约 1.1k 字符（≈650 token），随图片数量线性增长                                                                                                                                                                                                                       |
 | `interactiveIntervalSec`       | 互动碎碎念的识屏间隔（秒，默认 30，范围 5~3600）：每隔这么久截一次主屏，交给视觉模型随口吐槽 1~2 句                                                                                                                                                                                                                                                                                                                |
 | `interactiveMaxChars`          | 互动碎碎念单条回复的字数上限（默认 60，范围 10~200）：模型输出会先截到 1~2 句再按此上限收口，避免头顶气泡装不下                                                                                                                                                                                                                                                                                                         |
-| `interactiveVisionModel`       | 视觉模型名（默认 `glm-4v-flash`）：走 OpenAI 兼容的 `/chat/completions`，可换成任意支持 `image_url` 的模型                                                                                                                                                                                                                                                                                                          |
+| `interactiveVisionModel`       | 视觉模型名（默认 `glm-4.5v`，推理型视觉模型，关思考求快；看重免费/低延迟可改 `glm-4v-flash`）：走 OpenAI 兼容的 `/chat/completions`，可换成任意支持 `image_url` 的模型                                                                                                                                                                                                                                                                                                          |
 | `interactiveVisionBaseUrl`     | 视觉接口基址（默认 `https://open.bigmodel.cn/api/paas/v4`）                                                                                                                                                                                                                                                                                                                                                       |
 | `interactiveVisionEnvFile`     | 存 `ZHIPU_API_KEY` / `GLM_API_KEY` / `ZHIPU_MODEL` 的本地 `.env` 路径（默认留空 = 只读环境变量）。**Key 不会写进配置或回传客户端**，截图读完后临时文件立即删除                                                                                                                                                                                                                          |
 | `memes`（0.2.9）               | 表情包映射：键 = 包内 `assets/memes/<键>.png` 的文件名（不含扩展名），值 = 该图内容的简要描述（模型据此选图/配文）。配置里写了但文件不存在的条目**自动失效**（删图不必同步改配置）；删掉某个键即停用该图                                                                                                                                                                                                              |

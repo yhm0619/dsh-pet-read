@@ -53,7 +53,8 @@
     "assets/memes",
     "assets/config.jsonc",
     "scripts/ensure-electron.mjs",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "NOTICE"
   ],
   "license": "MIT",
   "dependencies": {

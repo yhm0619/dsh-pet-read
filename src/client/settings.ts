@@ -93,6 +93,18 @@ export const zh = {
   chatImageToggle: '对话配图',
   chatImageToggleHint:
     '对话时由 AI 按当前语境从表情包池挑一张配图（可不挑；图片映射在配置文件顶层 memes）。token：每条消息都要把整张清单附进请求，当前约 1.1k 字符（≈650 token，约碎碎念配图的 11 倍），并随图片数量线性增长；关掉则一个字符都不附。',
+  personaTitle: '人格设定',
+  personaHint:
+    '碎碎念 / 对话 / 互动碎碎念共用的人设提示词。可直接输入，也可导入 .txt / .md / .json 文本（JSON 取 whisperPrompt/persona/prompt/text 字段）；留空表示不修改当前设置。',
+  personaPlaceholder: '例如：你是主人桌面上的Q版蓝发小女仆，说话自然随意，短短一句……',
+  personaImport: '导入文本',
+  personaReset: '恢复默认人格',
+  personaChars: '{n} 字符',
+  personaImported: '已导入 {name}，点「保存」生效。',
+  personaImportError: '导入失败：{reason}',
+  personaTooLong: '人格设定过长（最多 20000 字符）。',
+  personaDefault:
+    '你是主人桌面上的Q版蓝发小女仆，会时不时碎碎念一句。说话要自然随意、短短一句（20字以内），温柔乖巧带点俏皮，说人话不啰嗦，不要解释你自己，不要提你是AI。',
   notifyGetPermission: '获取权限',
   notifyPermissionOk: '已获得通知权限，右下角出现测试通知。',
   notifyDenyUnsupported: '当前环境不支持系统通知（浏览器无 Notification API）。',
@@ -180,6 +192,18 @@ export const en = {
   chatImageToggle: 'Chat images',
   chatImageToggleHint:
     'Let the AI pick one meme from the pool that fits the current context (optional; mapping lives in the top-level `memes` config field). Tokens: every message carries the whole catalog — currently ~1.1k chars (~650 tokens, about 11x the whisper case) and growing with the number of images; turning this off appends nothing at all.',
+  personaTitle: 'Persona',
+  personaHint:
+    'Shared persona prompt for whispers, chat, and interactive screen-reading. Type it directly, or import .txt/.md/.json (JSON: whisperPrompt/persona/prompt/text). Leave empty to keep the current setting.',
+  personaPlaceholder: 'e.g. You are the chibi blue-haired maid on the master’s desktop. Speak naturally and briefly…',
+  personaImport: 'Import text',
+  personaReset: 'Restore default persona',
+  personaChars: '{n} characters',
+  personaImported: 'Imported {name}. Click Save to apply.',
+  personaImportError: 'Import failed: {reason}',
+  personaTooLong: 'Persona is too long (20,000 characters max).',
+  personaDefault:
+    'You are the chibi blue-haired maid living on the master’s desktop. Speak naturally and briefly (under 20 characters), gentle, cute, and a little playful. No rambling, no self-explanation, and never mention being an AI.',
   notifyGetPermission: 'Get permission',
   notifyPermissionOk: 'Notification permission granted — a test notification was sent.',
   notifyDenyUnsupported: 'System notifications are not supported in this environment (no Notification API).',
@@ -294,6 +318,9 @@ export function makePetConfigSection(rt: {
     // 表情包配图开关（全局：写用户级配置；与「保存」一起提交，不做即时写入）
     const [whisperImage, setWhisperImage] = useState(false);
     const [chatImage, setChatImage] = useState(false);
+    // 人格设定（全局 whisperPrompt；随「保存」写入用户级配置，不即时写入）
+    const [persona, setPersona] = useState('');
+    const [personaMsg, setPersonaMsg] = useState<{ kind: 'ok' | 'err' | ''; text: string }>({ kind: '', text: '' });
     // 权限申请按钮的反馈（就地显示在按钮旁，与全局保存反馈分离）
     const [permMsg, setPermMsg] = useState<{ kind: 'ok' | 'err' | ''; text: string }>({ kind: '', text: '' });
     useEffect(() => {
@@ -307,6 +334,7 @@ export function makePetConfigSection(rt: {
           if (typeof m.notificationsEnabled === 'boolean') setNotifyEnabled(m.notificationsEnabled);
           if (typeof m.whisperImageEnabled === 'boolean') setWhisperImage(m.whisperImageEnabled);
           if (typeof m.chatImageEnabled === 'boolean') setChatImage(m.chatImageEnabled);
+          if (typeof m.whisperPrompt === 'string') setPersona(m.whisperPrompt);
         })
         .catch(() => {
           /* 成品拉取失败时保持默认（通知开、配图关） */
@@ -372,6 +400,46 @@ export function makePetConfigSection(rt: {
       setPermMsg({ kind: 'ok', text: t('notifyPermissionOk') });
     };
 
+    // 人格设定：直接输入 + 导入常见文本格式（txt/md/json）；JSON 取常见人设字段
+    const DEFAULT_PERSONA = t('personaDefault');
+    const importPersonaFile = async (file: File) => {
+      try {
+        if (!file) return;
+        if (file.size > 64 * 1024) throw new Error('文件超过 64KB');
+        let text = await file.text();
+        if (/\.json$/i.test(file.name)) {
+          const parsed: unknown = JSON.parse(text);
+          const pick = (v: unknown): string => {
+            if (typeof v === 'string') return v;
+            if (!v || typeof v !== 'object') return '';
+            const o = v as Record<string, unknown>;
+            const main = o.main;
+            if (main && typeof main === 'object') {
+              const nested = (main as Record<string, unknown>).whisperPrompt;
+              if (typeof nested === 'string' && nested.trim()) return nested;
+            }
+            for (const key of ['whisperPrompt', 'persona', 'prompt', 'text', 'content']) {
+              const got = o[key];
+              if (typeof got === 'string' && got.trim()) return got;
+            }
+            return '';
+          };
+          text = pick(parsed);
+          if (!text.trim()) throw new Error('JSON 中没有 whisperPrompt/persona/prompt/text 字段');
+        }
+        text = text.trim();
+        if (!text) throw new Error('文件为空');
+        if (text.length > 20000) throw new Error('超过 20000 字符');
+        setPersona(text);
+        setPersonaMsg({ kind: 'ok', text: t('personaImported').replace('{name}', file.name) });
+      } catch (e) {
+        setPersonaMsg({
+          kind: 'err',
+          text: t('personaImportError').replace('{reason}', e instanceof Error ? e.message : String(e)),
+        });
+      }
+    };
+
     // 当前选中的宠物对象（表单数据源）；selId 由 add/remove/reset 同步维护，列表非空时恒有效
     const cur = pets.find((p) => p.id === selId) ?? null;
 
@@ -403,6 +471,11 @@ export function makePetConfigSection(rt: {
     const save = async () => {
       const isOk = validated();
       if (!isOk) return;
+      const personaText = persona.trim();
+      if (personaText.length > 20000) {
+        setMsg({ kind: 'err', text: t('personaTooLong') });
+        return;
+      }
       setBusy(true);
       setMsg({ kind: '', text: '' });
       try {
@@ -412,6 +485,8 @@ export function makePetConfigSection(rt: {
           notificationsEnabled: notifyEnabled,
           whisperImageEnabled: whisperImage,
           chatImageEnabled: chatImage,
+          // 留空 = 不改当前人格（用户可能只是想保留手写值）；非空才覆盖
+          ...(personaText ? { whisperPrompt: personaText } : {}),
         };
         const res = await fetch('/dsh-pet-7340/config', {
           method: 'PUT',
@@ -868,6 +943,126 @@ export function makePetConfigSection(rt: {
             ],
           }),
         ),
+
+        // 人格设定（全局 whisperPrompt；随「保存」写入用户级配置，不即时写入）
+        h('div', {
+          style: { marginTop: '14px' },
+          children: [
+            h('div', {
+              style: {
+                fontSize: '13px',
+                fontWeight: 600,
+                color: 'var(--dsw-alias-label-primary)',
+                marginBottom: '4px',
+              },
+              children: t('personaTitle'),
+            }),
+            h('div', {
+              style: {
+                fontSize: '11px',
+                lineHeight: '1.6',
+                color: 'var(--dsw-alias-label-tertiary)',
+                marginBottom: '6px',
+              },
+              children: t('personaHint'),
+            }),
+            h('textarea', {
+              value: persona,
+              disabled: busy,
+              rows: 6,
+              placeholder: t('personaPlaceholder'),
+              onChange: (e: ChangeEvent<HTMLTextAreaElement>) => setPersona(e.target.value),
+              onDragOver: (e: ReactNS.DragEvent<HTMLTextAreaElement>) => e.preventDefault(),
+              onDrop: (e: ReactNS.DragEvent<HTMLTextAreaElement>) => {
+                e.preventDefault();
+                const f = e.dataTransfer?.files?.[0];
+                if (f) void importPersonaFile(f);
+              },
+              style: {
+                width: '100%',
+                boxSizing: 'border-box',
+                minHeight: '120px',
+                resize: 'vertical',
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: '8px',
+                background: 'var(--dsw-alias-bg-layer-1)',
+                color: 'var(--dsw-alias-label-primary)',
+                padding: '8px 10px',
+                fontSize: '13px',
+                lineHeight: '1.6',
+                fontFamily: 'inherit',
+                outline: 'none',
+              },
+            }),
+            h('div', {
+              style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' },
+              children: [
+                h('label', {
+                  style: {
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    background: 'transparent',
+                    color: 'var(--dsw-alias-label-primary)',
+                    borderRadius: '8px',
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: busy ? 'default' : 'pointer',
+                    opacity: busy ? 0.55 : 1,
+                  },
+                  children: [
+                    t('personaImport'),
+                    h('input', {
+                      type: 'file',
+                      accept: '.txt,.md,.markdown,.json,text/plain,text/markdown,application/json',
+                      disabled: busy,
+                      style: { display: 'none' },
+                      onChange: (e: ChangeEvent<HTMLInputElement>) => {
+                        const f = e.target.files?.[0];
+                        if (f) void importPersonaFile(f);
+                        e.target.value = '';
+                      },
+                    }),
+                  ],
+                }),
+                h('button', {
+                  type: 'button',
+                  disabled: busy,
+                  onClick: () => {
+                    setPersona(DEFAULT_PERSONA);
+                    setPersonaMsg({ kind: '', text: '' });
+                  },
+                  style: {
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    background: 'transparent',
+                    color: 'var(--dsw-alias-label-primary)',
+                    borderRadius: '8px',
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: busy ? 'default' : 'pointer',
+                  },
+                  children: t('personaReset'),
+                }),
+                h('span', {
+                  style: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary)', marginLeft: 'auto' },
+                  children: t('personaChars').replace('{n}', String(persona.length)),
+                }),
+              ],
+            }),
+            personaMsg.text
+              ? h('div', {
+                  style: {
+                    fontSize: '12px',
+                    lineHeight: '18px',
+                    marginTop: '4px',
+                    color:
+                      personaMsg.kind === 'err'
+                        ? 'var(--dsw-alias-state-error-primary)'
+                        : 'var(--dsw-alias-state-ok-primary)',
+                  },
+                  children: personaMsg.text,
+                })
+              : null,
+          ],
+        }),
 
         // 权限获取按钮 + 反馈（独立一行，样式对齐设置页现有按钮）
         h('div', {

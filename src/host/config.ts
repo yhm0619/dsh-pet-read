@@ -505,11 +505,14 @@ export function saveUserConfig(
   if (wie !== undefined && typeof wie !== 'boolean') return null;
   const cie = o.chatImageEnabled;
   if (cie !== undefined && typeof cie !== 'boolean') return null;
-  // 白名单可编辑字段：pets 来自请求体、三个全局开关来自请求体（未传则不写）
+  const wp = o.whisperPrompt;
+  if (wp !== undefined && (typeof wp !== 'string' || !wp.trim() || wp.length > 20000)) return null;
+  // 白名单可编辑字段：pets 来自请求体、三个全局开关与人设来自请求体（未传则不写）
   const outConfig: { pets: unknown[]; [key: string]: unknown } = { pets: out };
   if (ne !== undefined) outConfig.notificationsEnabled = ne;
   if (wie !== undefined) outConfig.whisperImageEnabled = wie;
   if (cie !== undefined) outConfig.chatImageEnabled = cie;
+  if (wp !== undefined) outConfig.whisperPrompt = wp.trim();
   // 透传保留：请求体未携带的顶层字段，从 existing（磁盘现有用户文件）原样带回——
   // 设置页只提交 pets(+全局开关)，手改的 physics/whisperPrompt/memes/... 借此保住。
   // 全局开关只在「请求体传了」时才算白名单（已由上方写入）；未传时走这里透传磁盘旧值——
@@ -518,6 +521,7 @@ export function saveUserConfig(
   if (ne !== undefined) bodyOwned.add('notificationsEnabled');
   if (wie !== undefined) bodyOwned.add('whisperImageEnabled');
   if (cie !== undefined) bodyOwned.add('chatImageEnabled');
+  if (wp !== undefined) bodyOwned.add('whisperPrompt');
   if (existing && typeof existing === 'object') {
     for (const key of Object.keys(existing)) {
       if (bodyOwned.has(key)) continue; // 白名单字段由请求体决定

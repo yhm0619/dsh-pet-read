@@ -1,0 +1,102 @@
+{
+  "name": "dsh-pet",
+  "version": "0.3.0-read.1",
+  "description": "基于 dsh-pet 的互动碎碎念：每 30 秒识屏，用视觉模型在宠物头顶随口吐槽（不需要回复、不带表情包）。",
+  "author": "yhm0619",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "desktop-pet",
+    "pet",
+    "screen-reading",
+    "vision",
+    "glm-4v",
+    "cordis"
+  ],
+  "homepage": "https://github.com/yhm0619/dsh-pet-read#readme",
+  "repository": {
+    "url": "git+https://github.com/yhm0619/dsh-pet-read.git",
+    "type": "git"
+  },
+  "bugs": {
+    "url": "https://github.com/yhm0619/dsh-pet-read/issues"
+  },
+  "_comment": [
+    "dsh-pet-read：基于 dsh-pet 的互动碎碎念 fork（MIT）。",
+    "type: module —— 本包是 ESM；main: lib/index.js = 宿主半侧入口。",
+    "lib 为预构建产物（仓库不包含 tsdown 配置与开发依赖），安装时不再运行 prepare/prepack。",
+    "视觉模型 Key 只从环境变量或本地 .env 读取，不随包发布。"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./src/*": "./src/*",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "assets/webm",
+    "runtime/electron-helper",
+    "assets/fonts",
+    "assets/pic",
+    "assets/memes",
+    "assets/config.jsonc",
+    "scripts/ensure-electron.mjs",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@electron-internal/extract-zip": "^1.0.5",
+    "@electron/get": "^5.1.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent-default-model": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-connection": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-commands": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-credentials": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-home-paths": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.2.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "eslint": "^10.9.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.6",
+    "rolldown": "1.0.0-beta.7",
+    "tsdown": "^0.8.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.67.0"
+  },
+  "scripts": {
+    "ensure:electron": "node scripts/ensure-electron.mjs"
+  }
+}

@@ -1,0 +1,19 @@
+node_modules/
+.env
+.env.*
+*.env
+*.log
+*.bak
+*.tmp
+*.zip
+.DS_Store
+Thumbs.db
+desktop.ini
+dist/
+coverage/
+*.tsbuildinfo
+
+# dsh-pet 运行时用户数据（绝不入库）
+memory.json
+interactive.json
+main-config.json

@@ -8,8 +8,8 @@
 
 - **互动碎碎念**：右键「碎碎念」子菜单 = **随机碎碎念**（上游原功能）/ **互动碎碎念**（新）。开启后桌面端按 `interactiveIntervalSec`（默认 30 秒）截主屏 → 宿主调视觉模型 → 写进上游统一的 `/state` 气泡链路，显示在宠物头顶；再次点「互动碎碎念（已开启）」关闭。单向吐槽、不用回复、不带表情包。
 - **人设导入**：设置页每只宠物的「人设（可选）」输入框下新增「导入文本」，支持 `.txt` / `.md` / `.markdown` / `.json`（JSON 取 `whisperPrompt` / `persona` / `prompt` / `text`，也兼容 `main.whisperPrompt`）；导入后点「保存」生效。
-- **视觉模型**：默认 `glm-4.5v`（关思考，约 2~4 秒）；想用免费/低延迟可把 `interactiveVisionModel` 改回 `glm-4v-flash`。
-- 新增配置：`interactiveIntervalSec` / `interactiveMaxChars` / `interactiveVisionModel` / `interactiveVisionBaseUrl` / `interactiveVisionEnvFile`。API Key 只从环境变量 `ZHIPU_API_KEY` 或本地 `.env` 读取，仓库内不含任何 Key。
+- **视觉模型设置（设置页）**：每只宠物卡片的人设上方有「视觉服务商 / 视觉模型 / 接口地址 / 视觉模型 API Key」——服务商可选智谱 GLM、豆包 / 火山方舟、OpenAI、自定义 OpenAI 兼容；换服务商会自动填预设的地址和模型，仍可手改。默认为智谱 `glm-4.5v`（关思考，约 2~4 秒），想免费/低延迟可改 `glm-4v-flash`。
+- 新增配置：`interactiveIntervalSec` / `interactiveMaxChars` / `interactiveVisionProvider` / `interactiveVisionModel` / `interactiveVisionBaseUrl` / `interactiveVisionApiKey` / `interactiveVisionEnvFile`。API Key 的优先级：设置页输入（明文存本机 `main-config.jsonc`）> 环境变量 > 本地 `.env`；仓库内不含任何 Key。
 - 交互限制：只有桌面模式能静默截屏；浏览器端点「互动碎碎念」只会提示需要桌面模式。
 
 ## 安装本 fork
@@ -22,7 +22,7 @@ dsh plugin --profile web add github:yhm0619/dsh-pet-read
 
 > 包名仍是 `dsh-pet`：已安装上游时会被替换；安装前建议备份 `$DSH_HOME/dsh-pet/main-config.jsonc`（旧版是 `main-config.json`，上游首次启动会自动迁移）。
 >
-> 互动碎碎念需要视觉模型 Key：启动 DSH 前设置 `ZHIPU_API_KEY`，或把 `interactiveVisionEnvFile` 指到本地 `.env`。
+> 互动碎碎念需要视觉模型 Key：重启后在设置页「视觉模型 API Key」直接填，或启动前设置 `ZHIPU_API_KEY` / 把 `interactiveVisionEnvFile` 指到本地 `.env`。
 
 ---
 

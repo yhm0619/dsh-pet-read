@@ -65,9 +65,14 @@
   // API Key 只从环境变量或 interactiveVisionEnvFile 指向的 .env 读取，不会写进配置、也不会回传客户端。
   "interactiveIntervalSec": 30,
   "interactiveMaxChars": 60,
+  // 视觉服务商：zhipu / doubao / openai / custom（设置页「视觉模型」下拉框写的就是它）
+  "interactiveVisionProvider": "zhipu",
   "interactiveVisionModel": "glm-4.5v",
   "interactiveVisionBaseUrl": "https://open.bigmodel.cn/api/paas/v4",
   "interactiveVisionEnvFile": "",
+  // 视觉模型 API Key（可在设置页「视觉模型 API Key」直接填；明文保存在本机用户配置）
+  // 优先级：本字段 > ZHIPU_API_KEY 环境变量 > interactiveVisionEnvFile 指向的 .env
+  "interactiveVisionApiKey": "",
   // ===================== 表情包：图片映射（名称 → 描述，模型据此选图） =====================
   // 键 = assets/memes/<键>.png 的文件名（不含扩展名）；值 = 该图内容的简要描述。
   // 用途：碎碎念随机抽到某张图后，把该图描述注入提示词让模型配合画面说话；

@@ -388,10 +388,14 @@ function topFieldValid(key: string, value: unknown): boolean {
     }
     case 'interactiveVisionModel':
       return typeof value === 'string' && value.trim().length > 0;
+    case 'interactiveVisionProvider':
+      return value === 'zhipu' || value === 'doubao' || value === 'openai' || value === 'custom';
     case 'interactiveVisionBaseUrl':
       return typeof value === 'string' && /^https?:\/\//.test(value.trim());
     case 'interactiveVisionEnvFile':
       return typeof value === 'string';
+    case 'interactiveVisionApiKey':
+      return typeof value === 'string' && value.length <= 512;
     case 'confineToScreen':
       return typeof value === 'boolean';
     case 'animations':
@@ -773,6 +777,17 @@ export function saveUserConfig(
   // 与 chatMemoryRounds 同一套语义——传了就校验后进白名单，没传则走下面的透传保留。
   const cil = o.chatImageLimit;
   if (cil !== undefined && !topFieldValid('chatImageLimit', cil)) return null;
+  // 视觉模型 API Key（互动碎碎念；设置页「视觉模型 API Key」输入框写的就是它）：
+  // 明文落用户层。传空串 = 清除已保存 Key（bodyOwned 已认领该字段，不会被旧值透传回来）。
+  const vak = o.interactiveVisionApiKey;
+  if (vak !== undefined && (typeof vak !== 'string' || vak.length > 512)) return null;
+  // 视觉服务商 / 模型 / 接口地址：设置页「视觉模型」区写的就是它们；传了就按读取侧同一份规则校验。
+  const ivp = o.interactiveVisionProvider;
+  if (ivp !== undefined && !topFieldValid('interactiveVisionProvider', ivp)) return null;
+  const ivm = o.interactiveVisionModel;
+  if (ivm !== undefined && !topFieldValid('interactiveVisionModel', ivm)) return null;
+  const ivb = o.interactiveVisionBaseUrl;
+  if (ivb !== undefined && !topFieldValid('interactiveVisionBaseUrl', ivb)) return null;
   const cleanModel = (v: Record<string, unknown>): { provider: string; model: string } => ({
     provider: String(v.provider).trim(),
     model: String(v.model).trim(),
@@ -791,6 +806,10 @@ export function saveUserConfig(
   // 数值归一化落盘：请求体传 "9" 也存成 9（与读取侧 topFieldValid 的 Number() 口径一致）
   if (cmr !== undefined) outConfig.chatMemoryRounds = Number(cmr);
   if (cil !== undefined) outConfig.chatImageLimit = Number(cil);
+  if (vak !== undefined && vak.trim()) outConfig.interactiveVisionApiKey = vak.trim();
+  if (ivp !== undefined) outConfig.interactiveVisionProvider = ivp;
+  if (ivm !== undefined) outConfig.interactiveVisionModel = String(ivm).trim();
+  if (ivb !== undefined) outConfig.interactiveVisionBaseUrl = String(ivb).trim();
   // 透传保留：请求体未携带的顶层字段，从 existing（磁盘现有用户文件）原样带回——
   // 设置页只提交 pets(+全局开关+physics+模型+对话历史条数)，手改的 whisperPrompt/memes/... 借此保住。
   // 白名单字段只在「请求体传了」时才算白名单（已由上方写入）；未传时走这里透传磁盘旧值——
@@ -806,6 +825,10 @@ export function saveUserConfig(
   if (cm !== undefined) bodyOwned.add('chatModel');
   if (cmr !== undefined) bodyOwned.add('chatMemoryRounds');
   if (cil !== undefined) bodyOwned.add('chatImageLimit');
+  if (vak !== undefined) bodyOwned.add('interactiveVisionApiKey');
+  if (ivp !== undefined) bodyOwned.add('interactiveVisionProvider');
+  if (ivm !== undefined) bodyOwned.add('interactiveVisionModel');
+  if (ivb !== undefined) bodyOwned.add('interactiveVisionBaseUrl');
   if (existing && typeof existing === 'object') {
     for (const key of Object.keys(existing)) {
       if (bodyOwned.has(key)) continue; // 白名单字段由请求体决定

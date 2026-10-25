@@ -43,6 +43,41 @@ export function parseEnvText(raw: string): Record<string, string> {
   return out;
 }
 
+/** 视觉服务商预设：设置页「服务商」下拉框选它，这里给出默认接口地址/模型/环境变量名 */
+const VISION_PRESETS: Record<
+  string,
+  { baseUrl: string; model: string; keys: string[]; modelEnv: string; baseEnv: string }
+> = {
+  zhipu: {
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    model: 'glm-4.5v',
+    keys: ['ZHIPU_API_KEY', 'GLM_API_KEY'],
+    modelEnv: 'ZHIPU_MODEL',
+    baseEnv: 'ZHIPU_BASE_URL',
+  },
+  doubao: {
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-1.5-vision-pro',
+    keys: ['ARK_API_KEY', 'DOUBAO_API_KEY'],
+    modelEnv: 'ARK_VISION_MODEL',
+    baseEnv: 'ARK_BASE_URL',
+  },
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    keys: ['OPENAI_API_KEY'],
+    modelEnv: 'OPENAI_MODEL',
+    baseEnv: 'OPENAI_BASE_URL',
+  },
+  custom: {
+    baseUrl: '',
+    model: '',
+    keys: ['VISION_API_KEY'],
+    modelEnv: 'VISION_MODEL',
+    baseEnv: 'VISION_BASE_URL',
+  },
+};
+
 /** 把配置 / 环境变量 / 本地 .env 收敛成一次视觉调用所需的设置（key 缺失时显式失败，不伪造） */
 export async function resolveVisionSettings(conf: Record<string, unknown>): Promise<VisionSettings> {
   const envFile = typeof conf.interactiveVisionEnvFile === 'string' ? conf.interactiveVisionEnvFile.trim() : '';
@@ -58,16 +93,26 @@ export async function resolveVisionSettings(conf: Record<string, unknown>): Prom
     for (const v of vals) if (typeof v === 'string' && v.trim()) return v.trim();
     return '';
   };
-  const apiKey = first(process.env.ZHIPU_API_KEY, process.env.GLM_API_KEY, env.ZHIPU_API_KEY, env.GLM_API_KEY);
+  const rawProvider = typeof conf.interactiveVisionProvider === 'string' ? conf.interactiveVisionProvider.trim() : '';
+  const provider = rawProvider && VISION_PRESETS[rawProvider] ? rawProvider : 'zhipu';
+  const preset = VISION_PRESETS[provider];
+  const configuredKey = typeof conf.interactiveVisionApiKey === 'string' ? conf.interactiveVisionApiKey : undefined;
+  const apiKey = first(
+    configuredKey,
+    ...preset.keys.map((k) => process.env[k]),
+    ...preset.keys.map((k) => env[k]),
+    process.env.VISION_API_KEY,
+    env.VISION_API_KEY,
+  );
   const model = first(
     typeof conf.interactiveVisionModel === 'string' ? conf.interactiveVisionModel : undefined,
-    env.ZHIPU_MODEL,
-    'glm-4.5v',
+    env[preset.modelEnv],
+    preset.model,
   );
   const baseUrl = first(
     typeof conf.interactiveVisionBaseUrl === 'string' ? conf.interactiveVisionBaseUrl : undefined,
-    env.ZHIPU_BASE_URL,
-    'https://open.bigmodel.cn/api/paas/v4',
+    env[preset.baseEnv],
+    preset.baseUrl,
   );
   const rawInterval = Number(conf.interactiveIntervalSec);
   const rawMaxChars = Number(conf.interactiveMaxChars);
@@ -112,7 +157,7 @@ export function trimComment(input: string, maxChars: number): string {
 /** 视觉模型生成的失败原因：key 缺失单独区分（提示去配置），其余为接口/解析错误 */
 export type ScreenCommentResult =
   | { ok: true; text: string }
-  | { ok: false; reason: 'vision-missing' | 'generate-error'; message?: string };
+  | { ok: false; reason: 'vision-missing' | 'config-error' | 'generate-error'; message?: string };
 
 /**
  * 调一次视觉模型，直接产出「随口吐槽」（不再描述画面）。
@@ -132,7 +177,14 @@ export async function generateScreenComment(opts: {
     return {
       ok: false,
       reason: 'vision-missing',
-      message: '未配置视觉模型 API Key（ZHIPU_API_KEY / interactiveVisionEnvFile）',
+      message: '未配置视觉模型 API Key（设置页「视觉模型 API Key」/ ZHIPU_API_KEY / interactiveVisionEnvFile）',
+    };
+  }
+  if (!settings.baseUrl || !settings.model) {
+    return {
+      ok: false,
+      reason: 'config-error',
+      message: '未配置视觉模型的接口地址或模型名',
     };
   }
   const instruction =

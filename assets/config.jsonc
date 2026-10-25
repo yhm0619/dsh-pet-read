@@ -62,7 +62,7 @@
   // 每隔 interactiveIntervalSec 秒截一次主屏，交给视觉模型随口吐槽 1~2 句（不带表情包），
   // 结果显示在宠物头顶气泡。仅桌面模式能静默截屏；浏览器端点该菜单只会提示需要桌面模式。
   // 视觉接口走 OpenAI 兼容协议（默认智谱 GLM-4.5V，关思考求快；可改 glm-4v-flash 走免费模型）；
-  // API Key 只从环境变量或 interactiveVisionEnvFile 指向的 .env 读取，不会写进配置、也不会回传客户端。
+  // API Key 优先级：设置页输入（明文存本机用户配置）> 环境变量 > interactiveVisionEnvFile 指向的 .env；仓库默认不含 Key。
   "interactiveIntervalSec": 30,
   "interactiveMaxChars": 60,
   // 视觉服务商：zhipu / doubao / openai / custom（设置页「视觉模型」下拉框写的就是它）

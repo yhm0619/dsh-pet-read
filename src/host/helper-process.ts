@@ -17,7 +17,6 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { downloadArtifact } from '@electron/get';
-import extract from '@electron-internal/extract-zip';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -188,9 +187,10 @@ export async function ensureElectronDownload(options: EnsureElectronOptions = {}
   const startedAt = Date.now();
 
   log(`Electron not found, downloading v${version} (${PLAT}-${process.arch}) ...`);
-  mkdirSync(targetDir, { recursive: true });
 
   try {
+    // 目录创建也可能失败（权限不足、同名文件等），与下载失败一样降级到浏览器宠物。
+    mkdirSync(targetDir, { recursive: true });
     // 官方 @electron/get 下载：负责 URL 拼装、镜像、SHA256 校验（sumchecker）、下载缓存
     // （同一版本只下载一次，之后命中缓存秒回）。超时用 AbortController 传给 fetch。
     const controller = new AbortController();
@@ -225,6 +225,14 @@ export async function ensureElectronDownload(options: EnsureElectronOptions = {}
       // 官方 @electron-internal/extract-zip 解压（electron 43 官方安装同款）：
       // 纯 Node + native binding，跨平台一致，正确处理 symlink 与文件权限，
       // 不需要系统 unzip/tar/powershell，也没有我们手写的平台适配链。
+      //
+      // 为什么用**动态 import**而不是顶层静态 import：该包是 N-API 原生模块，预编译产物只覆盖
+      // 官方列出的 11 个 target，**没有 Android**（Termux 是 aarch64-linux-android / Bionic，
+      // 与列表里的 linux-gnu / linux-musl 都不是一回事）。静态 import 会在模块求值期就执行
+      // binding.js 顶层的 `if (!nativeBinding) throw`，于是**只想用 Web 模式**的用户也会因为
+      // 「插件入口加载失败」而整个 entry 激活失败（同类故障见 issue #80）。改成按需加载后，
+      // 这条路径只在真要解压时才走，失败也落进本函数的 catch → 降级到浏览器宠物。
+      const { default: extract } = await import('@electron-internal/extract-zip');
       await extract(zipPath, { dir: targetDir });
       if (!existsSync(exe)) {
         throw new Error(`Electron zip extracted, but ${ELECTRON_REL} not found`);
@@ -309,8 +317,12 @@ export class HelperProcess {
     const command = launch.command;
     const args = this.options.args || launch.args;
 
+    // issue #88：cwd 必须落在包目录之外 —— Windows 不允许重命名/删除活进程的当前目录，
+    // 否则 pnpm 无法 rename 覆盖 node_modules/dsh-pet。助手侧资源解析与 CWD 无关，故用 $DSH_HOME。
+    const cwd = this.options.cwd || dshHomeDir();
+    mkdirSync(cwd, { recursive: true }); // spawn 的 cwd 不存在会直接 ENOENT
     const child = spawn(command, args, {
-      cwd: this.options.cwd || packageRoot,
+      cwd,
       // DSH_PET_HOST_PID：把**宿主自己的** pid 交给 helper，让它能判断"宿主还在不在"
       // （helper 侧 host-liveness.js 每 2s kill(pid, 0) 一次；ESRCH 就自行退出，见 issue #56）。
       // 放在唯一的 spawn 点，所有调用方（含自定义 command）自动获得。
@@ -327,6 +339,13 @@ export class HelperProcess {
     this.child = child;
     child.once('error', (error) => {
       this.logger.error?.(`dsh-pet desktop helper failed to start: ${error.message}`);
+      // Failed spawn (ENOENT/EACCES) emits error, but no exit. Do not leave
+      // a non-running child blocking every later start. Errors from a live
+      // process (for example a failed kill) must still wait for its exit.
+      if (child.pid === undefined && this.child === child) {
+        this.child = undefined;
+        this.scheduleRestart();
+      }
     });
     child.once('exit', (code, signal) => {
       if (this.child !== child) return;

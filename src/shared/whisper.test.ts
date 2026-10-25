@@ -9,7 +9,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MEME_BUBBLE_CLASS, MEME_BUBBLE_CSS, MEME_IMG_CLASS, createMemeImage, memeImageUrl } from './whisper.ts';
+import {
+  MEME_BUBBLE_CLASS,
+  MEME_BUBBLE_CSS,
+  MEME_IMG_CLASS,
+  createMemeImage,
+  createMemeImageFromUrl,
+  memeImageUrl,
+} from './whisper.ts';
 
 describe('memeImageUrl —— 表情包图片地址', () => {
   test('中文名被 URL 编码（路由段只认编码后的形态）', () => {
@@ -50,6 +57,35 @@ describe('memeImageUrl —— 表情包图片地址', () => {
       assert.equal(url.split('/dsh-pet-7340').length - 1, 1, url);
     }
     assert.equal(memeImageUrl('可爱').split('/dsh-pet-7340').length - 1, 1);
+  });
+
+  test('带素材根 → 多一段 <素材根>（配图归属与动画同一套：按素材根取目录链）', () => {
+    assert.equal(
+      memeImageUrl('可爱', '/dsh-pet-7340', 'test1'),
+      '/dsh-pet-7340/pic/memes/test1/' + encodeURIComponent('可爱') + '.png',
+    );
+    // 中文素材根同样编码
+    assert.equal(
+      memeImageUrl('可爱', '/dsh-pet-7340', '小不点'),
+      '/dsh-pet-7340/pic/memes/' + encodeURIComponent('小不点') + '/' + encodeURIComponent('可爱') + '.png',
+    );
+    // 桌面端：base 已含前缀，素材根只加一段
+    assert.equal(
+      memeImageUrl('可爱', 'http://127.0.0.1:8080/dsh-pet-7340', 'pack1'),
+      'http://127.0.0.1:8080/dsh-pet-7340/pic/memes/pack1/' + encodeURIComponent('可爱') + '.png',
+    );
+    assert.equal(memeImageUrl('可爱', '/dsh-pet-7340', 'pack1').split('/dsh-pet-7340').length - 1, 1);
+  });
+
+  test('素材根缺省/空白 → 退回旧的两段形式（= 素材根 main 的目录链，不至于图裂）', () => {
+    const flat = memeImageUrl('可爱');
+    for (const root of ['', '   ', undefined]) {
+      assert.equal(memeImageUrl('可爱', '/dsh-pet-7340', root), flat);
+    }
+    assert.equal(
+      memeImageUrl('可爱', undefined, 'main'),
+      '/dsh-pet-7340/pic/memes/main/' + encodeURIComponent('可爱') + '.png',
+    );
   });
 });
 
@@ -119,6 +155,48 @@ describe('createMemeImage —— 两端共用的配图节点', () => {
         img?.props.src,
         'http://127.0.0.1:8080/dsh-pet-7340/pic/memes/' + encodeURIComponent('可爱') + '.png',
       );
+    } finally {
+      doc.restore();
+    }
+  });
+
+  test('createMemeImage 透传素材根（桌面端按宠物取自己的表情包目录）', () => {
+    const doc = stubDocument();
+    try {
+      createMemeImage('可爱', 'http://127.0.0.1:8080/dsh-pet-7340', 'pack1');
+      const img = doc.created.find((c) => c.tag === 'img');
+      assert.equal(img?.props.src, memeImageUrl('可爱', 'http://127.0.0.1:8080/dsh-pet-7340', 'pack1'));
+    } finally {
+      doc.restore();
+    }
+  });
+
+  test('createMemeImageFromUrl —— url 形态直接用那个完整地址（不拼表情包路径，也不需要 BASE）', () => {
+    const doc = stubDocument();
+    try {
+      createMemeImageFromUrl('https://cdn.example.com/拒绝换壁纸.png');
+      assert.equal(doc.created.filter((c) => c.tag === 'img').length, 1);
+      const img = doc.created.find((c) => c.tag === 'img');
+      // 与名称形态共用同一份样式 class（气泡靠它取消 min-width）
+      assert.equal(img?.props.className, MEME_IMG_CLASS);
+      assert.equal(img?.props.src, 'https://cdn.example.com/拒绝换壁纸.png');
+    } finally {
+      doc.restore();
+    }
+  });
+
+  test('createMemeImageFromUrl —— 地址缺失/空白 → null（调用方据此走纯文本路径）', () => {
+    for (const v of [undefined, '', '   ']) {
+      assert.equal(createMemeImageFromUrl(v), null);
+    }
+  });
+
+  test('两种形态互不干扰：url 形态绝不拼 /pic/memes（哪怕地址里带着同名文件名）', () => {
+    const doc = stubDocument();
+    try {
+      createMemeImageFromUrl('https://cdn.example.com/可爱.png');
+      const img = doc.created.find((c) => c.tag === 'img');
+      assert.ok(!String(img?.props.src).includes('/pic/memes/'));
     } finally {
       doc.restore();
     }

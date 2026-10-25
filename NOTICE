@@ -1,13 +1,14 @@
 dsh-pet-read
 ============
 
-This project is a fork of dsh-pet:
+This project is a fork of dsh-pet 0.3.8:
 
   https://github.com/PC2005-cloud/dsh-pet
   Copyright (c) 2026 PC2005-cloud
   Licensed under the MIT License (see LICENSE).
 
-Modifications for the "互动碎碎念" (screen-reading chatter) feature:
+Modifications for the "互动碎碎念" (screen-reading chatter) feature and
+persona text import:
 
   Copyright (c) 2026 yhm0619
   Licensed under the MIT License.

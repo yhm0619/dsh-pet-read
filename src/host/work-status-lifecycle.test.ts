@@ -19,8 +19,8 @@ import { Writable } from 'node:stream';
 
 import { apply } from './index.ts';
 
-/** /work-status 快照（与 WorkStatusSnapshot 同构） */
-type Snapshot = { state: string | null; task: string | null; ts: number };
+/** 工作状态快照（= S 里 sections.workStatus 的 data；ts 已由叶子 counter 取代，不再出现） */
+type Snapshot = { state: string | null; task: string | null };
 type Listener = (session: unknown, event: unknown) => void;
 /** 一个插件的测试实例：发事件 + 读快照 + 收尾 */
 type Harness = {
@@ -32,6 +32,8 @@ type Harness = {
 let dir = '';
 let savedHome: string | undefined;
 let savedElectron: string | undefined;
+/** 本文件建过的全部实例（after 里统一释放：apply() 现在会起常驻的余额周期定时器） */
+const harnesses: Harness[] = [];
 
 /** 最小响应桩：writeHead 记状态码，Writable 收集 body */
 class FakeRes extends Writable {
@@ -59,6 +61,8 @@ function setup(): Harness {
   const disposers: Array<() => void> = [];
   const noop = (): void => {};
   apply({
+    // 对外 Cordis 服务（ctx.provide）：与 DSH 一致，返回释放函数
+    provide: () => noop,
     effect: (fn: () => unknown) => {
       try {
         const ret = fn();
@@ -81,7 +85,7 @@ function setup(): Harness {
   assert.ok(handler, 'apply() 应注册 /dsh-pet-7340 prefix handler');
   assert.ok(listeners.length > 0, 'apply() 应监听 session/event');
 
-  return {
+  const harness: Harness = {
     emit: (sessionId, event) => {
       // 同时喂给 work-status 与 notify 两个监听者，与宿主行为一致
       for (const l of listeners) l({ header: { id: sessionId } }, event);
@@ -89,12 +93,20 @@ function setup(): Harness {
     snapshot: () =>
       new Promise<Snapshot>((done) => {
         const res = new FakeRes();
-        res.on('finish', () => done(JSON.parse(Buffer.concat(res.chunks).toString('utf8')) as Snapshot));
-        void handler?.({ method: 'GET', url: '/dsh-pet-7340/work-status', on: noop }, res);
+        res.on('finish', () => {
+          // 快照现在住在 S 的 sections.workStatus 叶子里（/work-status 端点已删）：
+          // 读它同时也是对"事件 → 写 S → /state 可读"这条新链路的端到端验证。
+          const body = JSON.parse(Buffer.concat(res.chunks).toString('utf8')) as {
+            sections?: { workStatus?: { data?: Snapshot | null } };
+          };
+          done(body.sections?.workStatus?.data ?? { state: null, task: null });
+        });
+        void handler?.({ method: 'GET', url: '/dsh-pet-7340/state', on: noop }, res);
       }),
     dispose: () => {
-      // 插件收尾：清掉待执行的终态清理定时器（否则 60s 定时器会把测试进程拖住）
-      for (const d of disposers.reverse()) {
+      // 插件收尾：清掉待执行的定时器（终态清理 60s；余额周期刷新是常驻的）——
+      // 不释放的话测试进程跑完不退出。splice 先取走再执行：重复 dispose 是安全的空操作。
+      for (const d of disposers.splice(0).reverse()) {
         try {
           d();
         } catch {
@@ -103,6 +115,8 @@ function setup(): Harness {
       }
     },
   };
+  harnesses.push(harness);
+  return harness;
 }
 
 before(() => {
@@ -115,6 +129,9 @@ before(() => {
 });
 
 after(() => {
+  // 每个用例都 apply() 过一个全新实例：统一在这里释放（否则余额周期定时器等常驻句柄
+  // 会把测试进程拖住不退出）。用例里也可以自行 dispose()，重复调用是安全的。
+  for (const h of harnesses.splice(0)) h.dispose();
   if (savedHome === undefined) delete process.env.DSH_HOME;
   else process.env.DSH_HOME = savedHome;
   if (savedElectron === undefined) delete process.env.DSH_PET_ELECTRON_PATH;

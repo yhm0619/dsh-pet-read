@@ -5,20 +5,21 @@
 //    （菜单组件证明可行的模式：浏览器页面与桌面透明窗渲染完全一致的对话框）。
 // 交互语义（与碎碎念同一显示效果，只多一步用户输入）：
 //    右键菜单「对话」→ 极简输入框 + 确认 → 点确认后弹窗消失 →
-//    桌宠把回复用碎碎念同款方式展示（说话动画 + 白色气泡 10s 消失）——
-//    此处只负责「拿到输入 → host 生成回复 → 通过 onReply 交回调用方」，
-//    展示/动画由调用方走碎碎念那条链路（两端各自的 triggerWhisper / showWhisper）。
+//    桌宠把回复用碎碎念同款方式展示（说话动画 + 白色气泡 10s 消失）。
+//  **回复由 S 的 pets.<id>.say 带回展示**：POST /chat 成功时响应里也有正文
+//    （`{ok,text,image?}`，与写进叶子的同一份），但本组件**不用**它——回复统一走
+//    /state 轮询展示，onSent 只用来叫醒一拍，让结果 0 延迟可见（见各端实现）。
 // 记忆语义：memory.json 全存不删；host 每次请求只截尾部 chatMemoryRounds 轮进上下文。
 
-/** POST /dsh-pet-7340/chat?pet=<id> {text}：新回复（host 已写入记忆）
- *  image = 本次回复配的表情包名称（chatImageEnabled 开启且模型选中池内图片时才有） */
+/** POST /dsh-pet-7340/chat?pet=<id> {text}：回执为 `{ok,text,image?}`；本类型只声明消费方
+ *  用到的 `ok`（正文展示一律走 /state 的 pets.<id>.say） */
 export type ChatSendState =
-  | { ok: true; reply: string; image?: string; ts: number }
+  | { ok: true }
   | { ok: false; reason: 'provider-missing' | 'generate-error' | 'config-error' | 'bad-request'; message?: string };
 
 const SEND_TIMEOUT_MS = 60_000; // 对话要等 LLM 生成回复，比碎碎念（30s）放宽一倍
 
-/** 发送一句对话（携带记忆去 host 生成回复；host 写入记忆后返回新回复）。
+/** 发送一句对话（携带记忆去 host 生成回复并写入记忆）。
  *  网络/解析失败显式抛错（调用方决定报错方式，绝不静默伪造）。 */
 export async function sendChat(baseUrl: string, text: string): Promise<ChatSendState> {
   const res = await fetch(baseUrl, {
@@ -40,10 +41,7 @@ export async function sendChat(baseUrl: string, text: string): Promise<ChatSendS
       message: typeof o.message === 'string' ? o.message : undefined,
     };
   }
-  const reply = typeof o.reply === 'string' ? o.reply.trim() : '';
-  if (!reply) throw new Error('dsh-pet: 对话回复非法');
-  const image = typeof o.image === 'string' && o.image.trim() ? o.image.trim() : undefined;
-  return image ? { ok: true, reply, image, ts: Number(o.ts) || 0 } : { ok: true, reply, ts: Number(o.ts) || 0 };
+  return { ok: true };
 }
 
 /** 弹窗样式 —— 两端注入同一份（与菜单 MENU_CSS 同理；视觉对齐浏览器/桌面）。
@@ -54,8 +52,11 @@ export const CHAT_CSS = [
   '.dsh-pet-chat{position:fixed;z-index:2147483001;width:160px;max-width:80vw;',
   'background:rgba(255,255,255,.98);border:1px solid rgba(0,0,0,.12);border-radius:10px;',
   'box-shadow:0 10px 32px rgba(0,0,0,.22);color:#2b2b2b;font-size:14px;line-height:1.5;',
-  // 字体与桌宠气泡同款（上首软糖体，两端均已注入 @font-face），风格一致不显正式
-  "font-family:'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif;",
+  // 字体与桌宠气泡同款（上首软糖体，两端均已注入 @font-face），风格一致不显正式。
+  // 字体族走全局配置变量 --dsh-pet-font-family：弹窗挂在 body 下、继承不到宠物根容器，
+  // 所以由两端注入在 documentElement（回退参数 = 改造前的原栈）。
+  // 字号保持固定 14px：配置里的 font.size 只作用于气泡与悬浮提示，不改变本弹窗。
+  "font-family:var(--dsh-pet-font-family,'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif);",
   'user-select:none}',
   '.dsh-pet-chat *{box-sizing:border-box}',
   '.dsh-pet-chat-input{display:block;width:100%;border:none;outline:none;background:transparent;',
@@ -92,7 +93,7 @@ export interface ChatDialogMount {
 
 /** 挂载一个对话输入弹窗（两端共用；位置为视口坐标，超出 clamp 矩形自动夹回）。
  *  最简形态：只有一条输入框（无标题/无按钮），回车即发送 → 弹窗关闭 →
- *  onReply(reply) 交给调用方走碎碎念同款显示（说话动画 + 气泡）；
+ *  onSent() 交给调用方叫醒一拍 /state（回复写进了 pets.<id>.say，气泡随下一拍出现）；
  *  Esc / 点弹窗外关闭；生成失败则留在弹窗内显式提示，不伪造回复。
  *
  *  clamp（可选，#41）：弹窗允许占用的矩形（视口局部坐标，默认整个视口）。
@@ -102,19 +103,23 @@ export function mountChatDialog(opts: {
   petId: string;
   /** 端点基址：浏览器默认相对 /dsh-pet-7340/chat；桌面传绝对 URL（file:// 页面需绝对） */
   baseUrl?: string;
+  /** 这个弹窗开在**哪一端**：`POST /chat` 的 `?surface=` 是必填的（宿主据此把"必然不可能"提前
+   *  拒掉，见 src/host/surface.ts）。弹窗只可能开在网页或桌面，所以这里只有两个取值。 */
+  surface: 'web' | 'desktop';
   x: number;
   y: number;
-  /** 发送成功后的回复（弹窗此时已关闭）；调用方负责播动画 + 气泡展示。
-   *  image = 本次配图名称（无配图时 undefined）——与碎碎念同一展示契约 */
-  onReply?: (reply: string, image?: string) => void;
+  /** 发送成功后调用（弹窗此时已关闭）：调用方叫醒一拍 /state 让回复 0 延迟出现。
+   *  回复本身不从这里回传——它走 S（动作端点不回数据，数据只有一个出口）。 */
+  onSent?: () => void;
   onClose?: () => void;
   /** 弹窗允许占用的矩形（视口局部坐标）；缺省 = 整个视口 */
   clamp?: { x: number; y: number; w: number; h: number };
 }): ChatDialogMount {
   injectChatCss();
-  const { petId, x, y, onReply, onClose, clamp } = opts;
+  const { petId, surface, x, y, onSent, onClose, clamp } = opts;
   const baseUrl = opts.baseUrl ?? '/dsh-pet-7340/chat';
-  const withPet = baseUrl + '?pet=' + encodeURIComponent(petId);
+  // `surface` 必填（宿主校验）；这个 URL 只用于 POST 发送——GET 读记忆那条路不需要它
+  const withPet = baseUrl + '?pet=' + encodeURIComponent(petId) + '&surface=' + surface;
   const c =
     clamp && Number.isFinite(clamp.x + clamp.y + clamp.w + clamp.h)
       ? clamp
@@ -194,7 +199,7 @@ export function mountChatDialog(opts: {
       .then((state) => {
         if (state.ok) {
           close();
-          if (onReply) onReply(state.reply, state.image);
+          if (onSent) onSent();
         } else {
           err.textContent = '对话失败：' + (state.message ?? state.reason);
           err.style.display = 'block';

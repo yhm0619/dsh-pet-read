@@ -14,7 +14,9 @@ export const SCORE_POPUP_CSS = [
   '.dsh-pet-score{position:fixed;z-index:2147483002;min-width:120px;text-align:center;',
   'background:rgba(255,255,255,.97);border:1px solid rgba(255,179,0,.35);border-radius:12px;',
   'box-shadow:0 10px 32px rgba(0,0,0,.22);padding:8px 16px 9px;user-select:none;pointer-events:auto;',
-  "font-family:'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif;}",
+  // 字体族走全局配置变量（由两端注入在 documentElement）：弹窗挂在 body 下，继承不到宠物根容器；
+  // 回退参数 = 改造前的原栈。字号保持固定 px（配置的 font.size 只作用于气泡与悬浮提示）。
+  "font-family:var(--dsh-pet-font-family,'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif);}",
   '.dsh-pet-score.is-in{animation:dshPetScorePop .28s ease}',
   '.dsh-pet-score-val{font-size:22px;line-height:1.25;font-weight:700;color:#ff8f00;font-variant-numeric:tabular-nums}',
   '.dsh-pet-score-sub{font-size:11px;line-height:1.4;color:rgba(43,43,43,.6);margin-top:2px;white-space:nowrap}',

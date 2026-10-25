@@ -1,4 +1,7 @@
 node_modules/
+dist/
+coverage/
+*.tsbuildinfo
 .env
 .env.*
 *.env
@@ -9,11 +12,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 desktop.ini
-dist/
-coverage/
-*.tsbuildinfo
 
 # dsh-pet 运行时用户数据（绝不入库）
 memory.json
 interactive.json
 main-config.json
+main-config.jsonc

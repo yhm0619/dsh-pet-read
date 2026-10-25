@@ -1,78 +1,106 @@
 # dsh-pet-read 🐾
 
-> **基于 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的「互动碎碎念」修改版**：保留原版全部桌宠能力，新增「碎碎念 → 互动碎碎念」——每 30 秒截一次主屏，交给视觉模型（默认智谱 GLM-4.5V）说出 1~2 句随口吐槽，直接显示在宠物头顶气泡里（不需要回复、不带表情包）。
+> **基于 [dsh-pet 0.3.8](https://github.com/PC2005-cloud/dsh-pet) 的「互动碎碎念」修改版**：保留上游全部桌宠能力，新增「碎碎念 → 互动碎碎念」——每 30 秒截一次主屏，交给视觉模型（默认智谱 GLM-4.5V，关思考）说出 1~2 句随口吐槽，接到宠物头顶气泡里（不需要回复、不带表情包）。同时给人设输入框加了文本导入。
 
-本仓库是 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的 fork，遵循 MIT 许可；原始版权归 PC2005-cloud 所有，修改部分版权归 yhm0619。**包名仍是 `dsh-pet`**，因此安装本仓库会替换同名的上游包。
+本仓库是 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的 fork，遵循 MIT 许可；原始版权归 PC2005-cloud 所有，修改部分版权归 yhm0619。包名仍是 `dsh-pet`，安装本仓库会替换同名的上游包。
 
 ## 🆕 本 fork 改了什么
 
-- 右键菜单「碎碎念」改为子菜单：**随机碎碎念**（原功能）/ **互动碎碎念**（新）
-- 新增宿主端点 `/dsh-pet-7340/interactive/tick`：接收桌面 Helper 的截图，调用 OpenAI 兼容视觉接口，输出限制在 1~2 句（`interactiveMaxChars`，默认 60 字）
-- 桌面端每 `interactiveIntervalSec` 秒（默认 30）截一次主屏 → 结果走原碎碎念展示链路（说话动画 + 头顶气泡，10 秒消失）；再次点「互动碎碎念（已开启）」关闭，切到「随机碎碎念」也会停掉
-- API Key 只从环境变量或本地 `.env` 读取，**仓库内不包含任何 Key**；`.env` 已被 `.gitignore` 排除
-- 仅桌面模式能静默截屏；浏览器模式点「互动碎碎念」只会提示需要桌面模式
-- 识屏会把当前屏幕截图发送给视觉服务商（默认智谱），不想被看时右键关掉
+- **互动碎碎念**：右键「碎碎念」子菜单 = **随机碎碎念**（上游原功能）/ **互动碎碎念**（新）。开启后桌面端按 `interactiveIntervalSec`（默认 30 秒）截主屏 → 宿主调视觉模型 → 写进上游统一的 `/state` 气泡链路，显示在宠物头顶；再次点「互动碎碎念（已开启）」关闭。单向吐槽、不用回复、不带表情包。
+- **人设导入**：设置页每只宠物的「人设（可选）」输入框下新增「导入文本」，支持 `.txt` / `.md` / `.markdown` / `.json`（JSON 取 `whisperPrompt` / `persona` / `prompt` / `text`，也兼容 `main.whisperPrompt`）；导入后点「保存」生效。
+- **视觉模型**：默认 `glm-4.5v`（关思考，约 2~4 秒）；想用免费/低延迟可把 `interactiveVisionModel` 改回 `glm-4v-flash`。
+- 新增配置：`interactiveIntervalSec` / `interactiveMaxChars` / `interactiveVisionModel` / `interactiveVisionBaseUrl` / `interactiveVisionEnvFile`。API Key 只从环境变量 `ZHIPU_API_KEY` 或本地 `.env` 读取，仓库内不含任何 Key。
+- 交互限制：只有桌面模式能静默截屏；浏览器端点「互动碎碎念」只会提示需要桌面模式。
 
----
-
-## 🚀 安装
-
-### 从本仓库（GitHub fork）安装
+## 安装本 fork
 
 ```sh
 dsh plugin --profile web add github:yhm0619/dsh-pet-read
 ```
 
-> 包名仍是 `dsh-pet`：已安装上游 `dsh-pet` 时会被替换。安装前建议备份 `$DSH_HOME/dsh-pet/main-config.json` 与 `memory.json`。
+桌面应用的插件管理页如果支持 GitHub 地址，也可以填 `github:yhm0619/dsh-pet-read`。
 
-### 从 npm 安装上游原版（不含互动碎碎念）
+> 包名仍是 `dsh-pet`：已安装上游时会被替换；安装前建议备份 `$DSH_HOME/dsh-pet/main-config.jsonc`（旧版是 `main-config.json`，上游首次启动会自动迁移）。
+>
+> 互动碎碎念需要视觉模型 Key：启动 DSH 前设置 `ZHIPU_API_KEY`，或把 `interactiveVisionEnvFile` 指到本地 `.env`。
+
+---
+
+以下是上游 `dsh-pet` 0.3.8 的完整文档（本 fork 保留）。
+# dsh-pet 🐾
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-pet?label=npm&color=blue"></a>
+  <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm monthly downloads" src="https://img.shields.io/npm/dm/dsh-pet?label=%E6%9C%88%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
+  <a href="https://www.npmjs.com/package/dsh-pet"><img alt="total downloads" src="https://img.shields.io/npm/dt/dsh-pet?label=%E6%80%BB%E4%B8%8B%E8%BD%BD&color=success"></a>
+  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="stars" src="https://img.shields.io/github/stars/PC2005-cloud/dsh-pet?style=social"></a>
+  <a href="https://github.com/PC2005-cloud/dsh-pet/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/github/license/PC2005-cloud/dsh-pet?color=orange"></a>
+  <a href="https://awesome-dsh-plugin.com"><img alt="awesome dsh plugin" src="https://awesome-dsh-plugin.com/badge.svg"></a>
+  <img alt="platform" src="https://img.shields.io/badge/platform-DeepSeek%20Harness%20Web-8A2BE2">
+  <img alt="assets" src="https://img.shields.io/badge/assets-dynamic%20animations-ff69b4">
+</p>
+
+> A floating desktop pet for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI: idle breathing, random actions (the 97 transparent animations — dozing off, playing with a Rubik's cube, writing code, hotpot…), turns, screen wandering, squash-and-stretch click reactions, throw-and-bounce drag physics, a right-click menu to play any action on demand, balance animations with a thinking bubble, **occasional self-talk and a chat dialog** (both can attach a meme image) — spawn as many pets as you want, live on your **desktop** (transparent always-on-top window), or add **brand-new pet species** (pet pack).
+> 一只住在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 里的桌面宠物：待机呼吸、随机动作（打瞌睡、玩魔方、写代码、吃火锅……97 个透明动画随时无缝衔接）、左右转向、屏幕漫游、点击 Q 弹、拖拽甩抛反弹、右键菜单点播动作、余额动画 + 头顶联想气泡、**时不时的碎碎念与对话**（都能配一张表情包）——可多开同屏，能脱离浏览器住上**桌面**（透明置顶小窗），也能自己添加**全新宠物种类**（pet pack）。
+
+---
+
+## 🚀 快速开始（安装插件）
+
+**桌面应用（Electron 版）**：在应用内「插件管理」页的安装框里填 `dsh-pet`，不用开终端；需要在终端里操作时，用桌面应用自带的那份 CLI。
+
+**`dsh web`**：
 
 ```sh
 dsh plugin --profile web add dsh-pet
 ```
 
-重启 `dsh web`，宠物出现在界面右上角（默认配置角落，可在设置页修改）——全部透明动画开箱即用，无需任何生成流程。
+装完**重开桌面应用**（`dsh web` 用户则重启 `dsh web`）才生效。宠物出现在界面右上角（默认配置角落，可在设置页修改）——全部透明动画开箱即用，无需任何生成流程。
 
-## 🔐 配置识屏 Key
-
-互动碎碎念需要视觉模型 Key，二选一：
-
-- **环境变量（推荐）**：启动 DSH 前设置 `ZHIPU_API_KEY`（PowerShell：`$env:ZHIPU_API_KEY="..."`）
-- **本地 `.env`**：把配置里的 `interactiveVisionEnvFile` 指到该文件，文件内写 `ZHIPU_API_KEY=...`
-
-仓库和默认配置都不包含 Key，`.env` 已被 `.gitignore` 排除。每 30 秒会把一张主屏截图发给智谱 GLM-4.5V；介意隐私时右键关掉「互动碎碎念」。
-
-> 💡 单一格式（默认 `.webm`）：浏览器 Chrome/Edge/Firefox 与桌面模式（Electron=Chromium）直接透明播放；Safari 不认 webm alpha（黑底），macOS 需要改用 `.mov`，见下方「🖥️ macOS 使用 mov」。
+> 💡 格式自动适配：Chrome/Edge/Firefox 与桌面模式（Electron=Chromium）播 `.webm`（VP9-alpha）；macOS Safari/WKWebView 会自动改用 `.mov`（HEVC-with-Alpha）。把 mov 素材放进目录即生效，没放时自动退回 webm（黑底但动画正常播，不会白屏）。见下方「🖥️ macOS 使用 mov」。
 
 > 💡 想自己造一只专属宠物？克隆 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库，用内置素材链（AI 提示词 → 绿幕视频 → 透明动画，素材由豆包生成）从零生成，全流程可复现。
 
+> 💡 不想每次都开着 DSH？`npx dsh-pet-standalone` 可以**完全不打开 DSH** 让桌宠住在桌面上，见下方「🧍 独立运行（完全不打开 DSH）」。
+
+### 安装后你会看到什么
+
+默认 `display: "both"`（浏览器与桌面都显示），重开 DSH 后两处会依次出现，不必手动开：
+
+1. **浏览器端先出现**：宠物落在界面右上角（默认角落，设置页可改），此时桌面上还是空的。
+2. **宿主自动补桌面运行时**：本机没有 Electron 时会自己下载一份（落在 `~/.dsh/electron`，同一版本只下一次），进度直接打在 DSH 的控制台里（`[dsh-pet] Electron not found …` → `downloading …` → `download complete …`）。这一步在**后台**进行，浏览器里的宠物照常可用，等多久取决于网速。
+3. **桌面端随后出现**：解压完自动拉起桌面 Helper，同一只宠物以透明窗形式落到桌面上——**此时屏幕上一共两只**：浏览器里一只、桌面上那只，共用同一份配置与同一套动画。
+4. **想只留一只**：设置页选中该宠物 →「显示位置」下拉框（仅浏览器 / 仅桌面 / 两者都显示 / 都不显示）；或在宠物上**右键 →「显示位置」**子菜单直接切换，不用回设置页。
+
+> 已经装过 Electron（或设了 `DSH_PET_ELECTRON_PATH`）时第 2 步会跳过，桌面端几乎立刻出现；下载失败**只影响桌面模式**，浏览器里的宠物不受影响。探测顺序、手动触发与镜像/版本环境变量见下方「🪟 桌面模式（脱离浏览器，可选）」。
+
 ## 🖥️ macOS 使用 mov（Safari 透明播放）
 
-macOS 的 Safari/WKWebView 下透明动画需用 `.mov` 素材，三步：
+macOS 的 Safari/WKWebView 不认 webm 的 alpha 通道（会渲染黑底），需要用 `.mov`（HEVC-with-Alpha）。客户端会**自动识别 macOS Safari** 并优先请求 `.mov`，所以只需两步：
 
 1. **下载 mov 素材**：<https://github.com/PC2005-cloud/dsh-pet/releases/tag/assets-mov>（保持最新，zip 解压后文件名与 webm 一一对应）
 2. **放入素材目录**：把 `.mov` 文件放进 `$DSH_HOME/dsh-pet/main-animation/mov/`（pet pack 宠物则是 `pet/<种类名>-animation/mov/`）
-3. **改变量**：搜 `ANIMATION_EXT`，把 `.webm` 改为 `.mov`：
-   - npm 包用户改产物 `lib/client.js`（桌面端如需再改 `runtime/electron-helper/shared-core.js`）
-   - 自构建用户改源码 `src/shared/constants.ts` 后重新构建
 
-改完重启 `dsh web`（或重新加载页面）即生效，其余平台不受影响。
+放好后刷新页面即生效，不用重启 `dsh web`。
+
+- **有 mov**：Safari 播 HEVC（真透明）；其他浏览器照旧用 webm，互不影响
+- **没有 mov**：Safari 退回 webm（黑底，动画正常播，不会白屏）
+- **桌面模式**（Electron=Chromium）始终用 webm，不受影响
 
 ## ✨ 功能特性
 
 - **纯粹的桌宠**：不掺业务功能——没有天气查询、系统监控、Agent 状态感知，就一件事：陪你（外加可选的余额展示、系统通知、碎碎念与对话，见配置节）。零核心改动；**默认零模型成本**——只有主动开启碎碎念（`pets[].whisperEnabled`）或主动发起对话时才会调用当前会话所用的模型，其余功能运行时零 LLM/API 调用
-- **手绘风透明动画**：待机呼吸、打瞌睡、玩魔方、哼歌、炸毛、吐泡泡、玩水枪、小提琴演奏、蓝鲸现世、吃白饭、照镜子、三支舞、写代码、四季动作（放风筝、堆雪人、吃冰淇淋、放烟花……）全部无缝衔接
+- **透明动画**：待机呼吸、打瞌睡、玩魔方、哼歌、炸毛、吐泡泡、玩水枪、小提琴演奏、蓝鲸现世、吃白饭、照镜子、三支舞、写代码、四季动作（放风筝、堆雪人、吃冰淇淋、放烟花……）全部无缝衔接
 - **永不停止的动画链**：每段动画播完立即按权重选下一个（默认 idle 10 / turn 5 / move 5，剩余 80% 归随机动作分类）
-- **屏幕漫游**：朝 facing 方向行走，自动检查空间、不走出屏幕
+- **屏幕漫游**：朝 facing 方向行走，自动检查空间、不走出屏幕（多屏时默认可骑缝跨屏；设置页「锁定在当前屏幕」开启后只在当前所在那块屏内走）
 - **点击 / 拖拽（弹簧跟手 + 甩抛反弹 + Q 弹）**：点击有随机回应动画（开心 / 害羞 / 傲娇）并「**Q 弹**」挤压回弹（垂直压扁 55% → easeOutBack 回弹过冲，贴地锚定）；拖拽为**过阻尼弹簧跟手**（不抖不飘、无 overshoot）；松手按最后轨迹估速（停顿/慢速 = 温柔放下原地停住）——**用力甩出即沿抛物线飞行：撞屏幕边缘按恢复系数反弹、落地摩擦减速至停，每次落地按冲击速度 Q 弹（轻落 0.8 ~ 重砸 0.55）**；物理与挤压曲线纯函数在 `src/shared/physics.ts`，浏览器与桌面严格同一手感（`prefers-reduced-motion` 时跳过挤压）
-- **物理参数化（0.2.5）**：拖拽抛掷手感全部由配置 `physics` 段驱动——重力（`gravity`，**0 = 无重力漂浮**）/ 碰壁恢复系数（`restitution`）/ 地面摩擦（`groundFriction`，0 = 冰面）/ 顶部反弹开关（`ceilingBounce`）/ 总力度（`throwPower`）/ 多宠物碰撞开关（`petCollision`），所有宠物全局共用（见配置节）
+- **物理参数化（0.2.5）**：拖拽抛掷手感全部由配置 `physics` 段驱动——重力（`gravity`，**0 = 无重力漂浮**）/ 碰壁恢复系数（`restitution`）/ 地面摩擦（`groundFriction`，0 = 冰面）/ 顶部反弹开关（`ceilingBounce`）/ 总力度（`throwPower`）/ 多宠物碰撞开关（`petCollision`），所有宠物共用（**全局默认**：设置页改一次对含 pet pack 的全部宠物生效；种类文件顶层可覆盖，见配置节）；**设置页「物理」区可图形化编辑**（6 个控件，与四个全局开关同一套语义：改完点「保存」整包写入用户配置，非法值就地红字提示、宿主也会拒绝）
 - **点击积分（0.2.5）**：飞行中的宠物被**按下**（速度 ≥ 400px/s）→ 点击处爆开粒子 + 弹出积分卡片；分数 = 速度/100 × 462/大小（线性，越快/越小分越高——小宠物目标小、更难命中，奖励更高）；静止/慢速点击维持普通点击回应动画（`prefers-reduced-motion` 时跳过粒子）
 - **多宠物碰撞（0.2.5）**：`petCollision: true` 开启后，飞行中的宠物撞到其它宠物按**动量守恒 + 恢复系数 0.995** 弹开（质量 ∝ size²，被撞方从落点以新初速抛出去），浏览器与桌面跨窗口同语义（默认关闭）
-- **碎碎念**：宠物时不时自己冒一句——按 `eventsRefreshSec.whisper` 周期（默认 300 秒）调用当前会话所用的模型生成（人设 = 全局 `whisperPrompt`，另追加一句名字声明），气泡展示 10 秒；右键菜单「碎碎念」可立即催一句（绕过节流，同一实例的多端一起看到）。**默认关闭**，按宠物开（`pets[].whisperEnabled`）
-- **互动碎碎念**：右键「碎碎念 → 互动碎碎念」开启识屏循环——每 `interactiveIntervalSec` 秒（默认 30）截一次屏，交给视觉模型（默认智谱 `glm-4.5v`，关思考，2~4 秒响应）用偏犀利的搭子口吻吐槽 1~2 句（`interactiveMaxChars` 字以内，**不带表情包**），直接显示在宠物头顶的碎碎念气泡里（与普通碎碎念同一套展示/动画）。单向吐槽、不用回复；再次点「互动碎碎念（已开启）」关闭，切到「随机碎碎念」也会自动停掉。API Key 只从环境变量 `ZHIPU_API_KEY` / `interactiveVisionEnvFile` 指向的 `.env` 读取（不写进配置、不回传客户端），识屏历史落在 `$DSH_HOME/dsh-pet/interactive.json`（仅用于避免重复，不污染对话记忆）。仅桌面模式有静默截屏能力
+- **碎碎念**：宠物时不时自己冒一句——按 `eventsRefreshSec.whisper` 周期（默认 300 秒）调用当前会话所用的模型生成（人设 = **该宠物自己的** `whisperPrompt`，没写就回落到所属条目的那份；另追加一句名字声明与时间背景），气泡展示 10 秒；右键菜单「碎碎念」可立即催一句（绕过节流，同一实例的多端一起看到）。**默认开启**，按宠物可关（`pets[].whisperEnabled`）
 - **对话**：右键「对话」弹窗跟宠物聊天，也能用 `/chat <消息>` 命令（留空 = 催一句碎碎念）——记忆持久化在 `$DSH_HOME/dsh-pet/memory.json`（**全存不删**，每次请求只带最近 `chatMemoryRounds` 轮），浏览器与桌面共享同一份记忆；对话目标为 `/pet` 选中的那只，未选则取列表第一只
-- **表情包配图（0.2.9）**：气泡可以带一张表情包——碎碎念**随机抽 1 张**（`whisperImageEnabled`：只是把这张图的描述加进同一次请求，约 +100 字符 / ≈60 token，增量可忽略）；对话把**整张清单**交给模型按语境选（`chatImageEnabled`：每条消息约 +1.1k 字符 / ≈650 token，约碎碎念配图的 11 倍，随图片数量线性增长）。图片与描述的映射在 `memes`（键 = 包内 `assets/memes/<键>.png`），两个开关默认都关
-- **右键级联菜单**：右键宠物弹出（桌面与浏览器共用同一份组件，`src/shared/menu.ts`）——桌面端根项「**打开网站** / **查看余额** / **回到初始位置** + **动作**」、浏览器端「**回到初始位置** + **动作**」；「打开网站」用**系统默认浏览器**打开 DSH 网站（等效网页里 Ctrl+点击链接）；「查看余额」立即拉余额弹气泡播档位动画（与周期触发同一展示路径）；「回到初始位置」停漫游回配置角落；「碎碎念」子菜单 = **随机碎碎念**（原手动催一句）/ **互动碎碎念**（开启识屏吐槽循环，结果显示在头顶气泡）；**动作 → 分类 → 具体动画**（分类 = 待机/转向/拖拽/点击回应/移动/随机动作分类/余额档位；**点播「移动」分类动画会真实行走一段**——边界检查/随机距离/起停时段与随机移动完全一致；noMirror 文字类朝右时自动强制朝左）——浏览器端只在宠物命中区拦截右键（`preventDefault`），完全不进入/改动 DSH 页面自己的菜单
+- **表情包配图（0.2.9）**：气泡可以带一张表情包——碎碎念**随机抽 1 张**（`whisperImageEnabled`：只是把这张图的描述加进同一次请求，约 +100 字符 / ≈60 token，增量可忽略）；对话把**整张清单**交给模型按语境选（`chatImageEnabled`：每条消息约 +1.1k 字符 / ≈650 token，约碎碎念配图的 11 倍，随图片数量线性增长）。图片与描述的映射在 `memes`（键 = 表情包目录里的 `<键>.png`；素材归属与动画同一套，见「高级自定义」），两个开关默认都开
+- **右键级联菜单**：右键宠物弹出（桌面与浏览器共用同一份组件，`src/shared/menu.ts`）——桌面端根项「**打开网站** / **查看余额** / **回到初始位置** / **重载配置** + **动作**」、浏览器端「**回到初始位置** + **动作**」；「打开网站」用**系统默认浏览器**打开 DSH 网站（等效网页里 Ctrl+点击链接）；「查看余额」立即拉余额弹气泡播档位动画（与周期触发同一展示路径）；「回到初始位置」停漫游回配置角落；「重载配置」（桌面专属）请宿主重启桌面 Helper——**全部桌面宠物窗口按最新配置重建**，改完配置文件不必回设置页点保存（与保存同一条重启路径：等旧进程退出再起新的；代价是会话内拖拽落点清空、回配置角落）；**动作 → 分类 → 具体动画**（分类 = 待机/转向/拖拽/点击回应/移动/随机动作分类/余额档位；**点播「移动」分类动画会真实行走一段**——边界检查/随机距离/起停时段与随机移动完全一致；noMirror 文字类朝右时自动强制朝左）——浏览器端只在宠物命中区拦截右键（`preventDefault`），完全不进入/改动 DSH 页面自己的菜单。**「打开网站」按宿主自动分派**：宿主是 DSH 桌面应用时该项自动变「**打开软件**」，用应用自注册的 `dsh://open` 协议把桌面应用主窗口唤到前台（已运行前置 / 未运行拉起）；`dsh web` 与独立模式仍是系统默认浏览器打开站点
 - **左右朝向**：所有动画 CSS 镜像，人物可朝左 / 朝右
 - **落地对齐**：动画统一脚底线，宠物始终站在"地面"上
 - **流畅切换**：双缓冲 video 交叉淡入，切换零空白帧
@@ -81,7 +109,7 @@ macOS 的 Safari/WKWebView 下透明动画需用 `.mov` 素材，三步：
 - **桌面模式（可选）**：可脱离浏览器住上桌面——透明置顶局部小窗，与浏览器严格同行为（见下节）
 - **余额展示**：实时显示余额/额度，按档位播动画 + 头顶联想气泡，每只宠物可独立开关
 - **额外宠物种类（pet pack）**：在 `pet/` 自建「种类」（独立动画池 + 自己的素材），多实例共享，与主宠物严格隔离（见配置节）
-- **自定义动画**：`main-animation/webm/` 放 VP9-Alpha `.webm` 即作为新动画，优先于包内素材
+- **自定义动画**：`main-animation/webm/` 放 VP9-Alpha `.webm` 即作为新动画，优先于包内素材（macOS Safari 可再放一份同名 `.mov` 到 `main-animation/mov/`，会被自动优先使用）
 
 ## 🪟 桌面模式（脱离浏览器，可选）
 
@@ -93,12 +121,34 @@ macOS 的 Safari/WKWebView 下透明动画需用 `.mov` 素材，三步：
 
 ### 桌面模式怎么装 / 关
 
+- **插件安装**：桌面版在应用内「插件管理」页装 `dsh-pet`（见上方「快速开始（安装插件）」）
 - **依赖 Electron**：首次拉起时自动探测（`DSH_PET_ELECTRON_PATH` 环境变量 → 本机 electron 包 → `~/.dsh/electron/` 落地路径），找不到会通过官方 @electron/get 自动下载到 `~/.dsh/electron/`（`npm run ensure:electron` 可手动触发）；Electron 不可用时仅日志告警，**不影响浏览器形态**
 - **开关 = 每只宠物的 `display` 字段（pets 必填，四个值）**：
   - `web` = 仅浏览器 overlay / `desktop` = 仅桌面模式 / `both` = 两者都显示 / `none` = 都不显示
   - 桌面模式渲染 `display` 含 `desktop` 的**全部**宠物（多开同屏，与浏览器一致）；大小/位置各自读自己的配置
   - 在 DSH 设置页「桌宠配置」编辑，保存即时生效；`display` 缺失/非法即配置错误，**代码不做兜底**
-- 桌面与浏览器是**同一套动画素材**（`/dsh-pet-7340/thumb/<前缀>/<name>.webm`：main 用用户 `main-animation/` 目录优先 + 包内素材；额外宠物只查自己的 `pet/<前缀>-animation/`，同种类多实例共享）；配置加载失败会**大声报错**（红色错误条 + 每 5 秒自动重试），绝不静默兜底
+- 桌面与浏览器是**同一套动画素材**（`/dsh-pet-7340/thumb/<前缀>/<name>.webm`：main 用用户 `main-animation/` 目录优先 + 包内素材；额外宠物只查自己的 `pet/<前缀>-animation/`，同种类多实例共享）；**配图（表情包）共用同一套素材归属**（`/dsh-pet-7340/pic/memes/<前缀>/<名>.png`：`pet/<前缀>-memes/` 独占 → 用户 `memes/` → 包内 `assets/memes/`）；配置加载失败会**大声报错**（红色错误条 + 每 5 秒自动重试），绝不静默兜底
+
+## 🧍 独立运行（完全不打开 DSH）
+
+上面的桌面形态由 DSH 宿主拉起。独立模式让它**不需要 DSH 在跑**：把插件自己的宿主半边
+（`src/host/index.ts` 的 `apply`）跑在一个最小的伪 ctx 上，再起一个本机 HTTP 服务接管路由 ——
+**路由表仍然只有插件那一份**（同一个 handler 同时服务 HTTP 与桌面助手的 bridge 管道）。
+
+```sh
+npm install -g dsh-pet        # 必须 npm 装；dsh plugin add 装进 profile，bin 不在 PATH 上
+dsh-pet-standalone            # http://127.0.0.1:3080/dsh-pet-7340/（占用则顺延）
+dsh-pet-standalone --check    # 只体检
+dsh-pet-standalone --port 3100
+
+npm run build && npm run standalone   # 仓库里（先构建）
+```
+
+- **能用**：动画链、点击/拖拽/甩抛、右键菜单、多开、自定义动画与表情包、pet pack。
+- **不可用**：余额、碎碎念、对话、系统通知——返回带 `reason` 的结构化失败，不假装成功。
+- **配置**：与 DSH 同一份（`$DSH_HOME/dsh-pet/main-config.jsonc` → 包内默认）。
+- **只显示 `display` 含 `desktop`/`both` 的实例**；端口默认 3080；`Ctrl+C` 或 `POST /shutdown` 退出。
+- **与 DSH 内运行可同时开**，但共用 `%APPDATA%\dsh-pet-electron-helper`，可能互相踩缓存（仅告警）。
 
 ## ⌨️ 斜杠命令
 
@@ -114,63 +164,61 @@ macOS 的 Safari/WKWebView 下透明动画需用 `.mov` 素材，三步：
 
 ## ⚙️ 配置
 
-| 配置项                         | 说明                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 设置页「桌宠配置」             | DSH 设置 → 桌宠配置：图形化编辑**大小 / 位置 / 边距**，支持**多开**（添加/删除宠物，每只独立配置）；三个全局开关也在设置页——系统通知（切换即时生效）、碎碎念配图 / 对话配图（随「保存」一起写入）；保存**即时生效**，恢复默认回落 config.jsonc                                                                                                                                                                        |
-| `pets`（config.jsonc）         | 默认宠物列表：`[{ "id", "name", "size", "balanceEnabled", "whisperEnabled", "workStatusEnabled", "display", "position": { "corner", "marginX", "marginY" } }]`；`display` 为 web/desktop/both/none（必填，缺失即配置错误）；`whisperEnabled` / `workStatusEnabled` = 碎碎念 / 工作状态气泡开关（默认 false）；多只即多开，`display` 含 desktop 的宠物出现在桌面窗口（与浏览器同屏渲染），首只为「添加宠物」的默认模板 |
-| 设置页「人格设定」             | 设置 → 桌宠配置 → 人格设定：可直接输入，也可导入 `.txt` / `.md` / `.json`（JSON 取 `whisperPrompt` / `persona` / `prompt` / `text` 字段）；随「保存」写入 `main-config.json` 顶层 `whisperPrompt`，上限 20000 字符；留空表示不修改当前值 |
-| `whisperPrompt`                | 碎碎念、对话与互动碎碎念共用的**人设系统提示词**（全局，所有宠物共用；种类文件顶层可覆盖）：默认「你是主人桌面上的Q版蓝发小女仆……20 字以内」；实际发出的 system = 它 + 一句「你的名字是“<宠物名>”。」；也可在设置页「人格设定」里编辑/导入 |                                                                                                                                                                                                                             |
-| `chatMemoryRounds`             | 每次对话请求携带的最近历史轮数（默认 5；1 轮 = 1 问 1 答）：`memory.json` **全存不删**，此值只决定截取多少进上下文                                                                                                                                                                                                                                                                                                    |
-| `whisperImageEnabled`（0.2.9） | 碎碎念配图总开关（布尔，默认关）：开启后每次碎碎念从 `memes` 池**随机抽 1 张**，连同那句话一起显示。token：碎碎念本来就每次生成都要调一次模型，配图只多约 100 字符（≈60 token），增量可忽略                                                                                                                                                                                                                           |
-| `chatImageEnabled`（0.2.9）    | 对话配图总开关（布尔，默认关）：开启后把**整张** `memes` 清单交给模型**按语境选 1 张**（可不选；选了池外名称视为没选并剥掉标记）。token：每条消息约 1.1k 字符（≈650 token），随图片数量线性增长                                                                                                                                                                                                                       |
-| `interactiveIntervalSec`       | 互动碎碎念的识屏间隔（秒，默认 30，范围 5~3600）：每隔这么久截一次主屏，交给视觉模型随口吐槽 1~2 句                                                                                                                                                                                                                                                                                                                |
-| `interactiveMaxChars`          | 互动碎碎念单条回复的字数上限（默认 60，范围 10~200）：模型输出会先截到 1~2 句再按此上限收口，避免头顶气泡装不下                                                                                                                                                                                                                                                                                                         |
-| `interactiveVisionModel`       | 视觉模型名（默认 `glm-4.5v`，推理型视觉模型，关思考求快；看重免费/低延迟可改 `glm-4v-flash`）：走 OpenAI 兼容的 `/chat/completions`，可换成任意支持 `image_url` 的模型                                                                                                                                                                                                                                                                                                          |
-| `interactiveVisionBaseUrl`     | 视觉接口基址（默认 `https://open.bigmodel.cn/api/paas/v4`）                                                                                                                                                                                                                                                                                                                                                       |
-| `interactiveVisionEnvFile`     | 存 `ZHIPU_API_KEY` / `GLM_API_KEY` / `ZHIPU_MODEL` 的本地 `.env` 路径（默认留空 = 只读环境变量）。**Key 不会写进配置或回传客户端**，截图读完后临时文件立即删除                                                                                                                                                                                                                          |
-| `memes`（0.2.9）               | 表情包映射：键 = 包内 `assets/memes/<键>.png` 的文件名（不含扩展名），值 = 该图内容的简要描述（模型据此选图/配文）。配置里写了但文件不存在的条目**自动失效**（删图不必同步改配置）；删掉某个键即停用该图                                                                                                                                                                                                              |
-| `notificationsEnabled`         | 系统通知总开关（布尔，默认开）：对话完成 / 生成失败 / 输出截断 / 权限申请 / 用户选择，在窗口失焦时弹系统级通知（桌面右下角）                                                                                                                                                                                                                                                                                          |
-| `physics`（0.2.5）             | 拖拽抛掷物理参数（全局，所有宠物共用）：`gravity` 重力 / `restitution` 碰壁恢复系数（0~1）/ `groundFriction` 地面摩擦 / `ceilingBounce` 顶部反弹 / `throwPower` 总力度 / `petCollision` 多宠物碰撞开关；缺省取内置默认（1400 / 0.78 / 2.5 / true / 1.0 / false）；`gravity=0` 为无重力，`petCollision=true` 开启多宠物碰撞                                                                                            |
+| 配置项                         | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 设置页「桌宠配置」             | DSH 设置 → 桌宠配置：图形化编辑**大小 / 位置 / 边距**，支持**多开**（添加/删除宠物，每只独立配置）；全局开关也在设置页——系统通知（点保存才写入）、碎碎念配图 / 对话配图 / 锁定在当前屏幕（随「保存」一起写入）；保存**即时生效**，「同步」把项目内置的 `config.jsonc`（原文，含注释与全部高级字段）整份写入用户配置，既是恢复默认又留下一份可直接编辑的完整配置                                                                                                                                    |
+| `pets`（config.jsonc）         | 默认宠物列表：`[{ "id", "name", "size", "balanceEnabled", "whisperEnabled", "workStatusEnabled", "display", "position": { "corner", "marginX", "marginY" }, "whisperPrompt"? }]`；`display` 为 web/desktop/both/none（必填，缺失即配置错误）；`whisperEnabled` / `workStatusEnabled` = 碎碎念 / 工作状态气泡开关（默认：true）；`whisperPrompt` 可选 = **这只宠物自己的人设**（见下一行）；多只即多开，`display` 含 desktop 的宠物出现在桌面窗口（与浏览器同屏渲染），首只为「添加宠物」的默认模板 |
+| `whisperPrompt`                | 碎碎念与对话共用的**人设系统提示词**：写在 `pets[]` 条目里 = 该宠物专属，写了就**取代**所属条目顶层那份；写在条目顶层（或种类文件顶层）= 该条目的默认人设。设置页「桌宠配置」每只宠物都有「人设」输入框（留空 = 跟随条目）。只写正文：实际发出的 system = 它 + 自动追加的一句「你的名字是“<宠物名>”。」+ 一行时间背景（日期/星期/时刻/时段/工作日或周末/节日），**没有长度上限**，也别在里面重复写名字和日期                                                                                       |
+| `chatMemoryRounds`             | 每次对话请求携带的最近历史轮数（默认 5；1 轮 = 1 问 1 答；0 = 不带历史）：`memory.json` **全存不删**，此值只决定截取多少进上下文。**全局默认**（设置页「AI 模型与对话上下文」区一个数字输入框，改一次对所有宠物生效，含 pet pack；种类文件顶层可覆盖）                                                                                                                                                                                                                                             |
+| `whisperModel` / `chatModel`   | 碎碎念 / 对话各自用哪个**服务商 + 模型**（**全局默认**：设置页改一次对所有宠物生效，含 pet pack；种类文件顶层可覆盖。设置页「AI 模型」每项一个下拉框，与 DSH 对话框右下角的模型选择器同款：搜索 + 按服务商分组的清单，选项同源）。`provider` 与 `model` **都留空 = 跟随当前对话的模型**（默认）；只填一半即配置错误。填了但调用失败（凭据被删 / 模型下架）会自动回落到当前对话的模型重试一次                                                                                                       |
+| `whisperImageEnabled`（0.2.9） | 碎碎念配图开关（布尔，默认开；**全局默认**，pet pack 可在种类文件里覆盖）：开启后每次碎碎念从 `memes` 池**随机抽 1 张**，连同那句话一起显示。token：碎碎念本来就每次生成都要调一次模型，配图只多约 100 字符（≈60 token），增量可忽略                                                                                                                                                                                                                                                               |
+| `chatImageEnabled`（0.2.9）    | 对话配图开关（布尔，默认开；**全局默认**，pet pack 可在种类文件里覆盖）：开启后把**整张** `memes` 清单交给模型**按语境选 1 张**（可不选；选了池外名称视为没选，标记会原样留在正文里）。token：每条消息约 1.1k 字符（≈650 token），随图片数量线性增长                                                                                                                                                                                                                                               |
+| `chatImageLimit`               | 对话配图**张数上限**（非负整数，默认 10，0 = 不限制；**全局默认**，pet pack 可在种类文件里覆盖）：对话时只把 `memes` 清单的**前 N 张**（= 配置里写在前面的那 N 条，想优先发哪几张就往前写）交给模型选图。原因：整张清单是**每条消息都要附**的，token 随张数线性增长（27 张约 1.1k 字符 ≈ 650 token），限制成前 N 张即可给配图开销封顶。设置页「AI 模型与对话上下文」区可改。只影响对话选图——碎碎念只带抽中的那一张                                                                                 |
+| `memes`（0.2.9）               | 表情包映射：键 = 表情包目录里的 `<键>.png` 文件名（不含扩展名），值 = 该图内容的简要描述（模型据此选图/配文）。图片按**素材归属**查找（种类独占 `pet/<前缀>-memes/` → 用户目录 `memes/` → 包内 `assets/memes/`，与动画同规矩）；配置里写了但哪个目录都没有该文件的条目**自动失效**（删图不必同步改配置）；删掉某个键即停用该图                                                                                                                                                                     |
+| `notificationsEnabled`         | 系统通知总开关（布尔，默认开）：对话完成 / 生成失败 / 输出截断 / 权限申请 / 用户选择，在窗口失焦时弹系统级通知（桌面右下角）                                                                                                                                                                                                                                                                                                                                                                       |
+| `physics`（0.2.5）             | 拖拽抛掷物理参数（**全局默认**，所有宠物共用；种类文件顶层可覆盖）：`gravity` 重力 / `restitution` 碰壁恢复系数（0~1）/ `groundFriction` 地面摩擦 / `ceilingBounce` 顶部反弹 / `throwPower` 总力度 / `petCollision` 多宠物碰撞开关；缺省取内置默认（1400 / 0.78 / 2.5 / true / 1.0 / false）；`gravity=0` 为无重力，`petCollision=true` 开启多宠物碰撞                                                                                                                                             |
 
-> 说明：插件安装即用，配置均为可选；设置页保存的用户覆盖写入 `$DSH_HOME/dsh-pet/main-config.json`（用户层，优先于包内默认）。
+> 说明：插件安装即用，配置均为可选；设置页保存的用户覆盖写入 `$DSH_HOME/dsh-pet/main-config.jsonc`（用户层，优先于包内默认）。
 
 ### 📄 高级自定义（直接编辑配置文件）
 
 用户数据统一收敛在 `$DSH_HOME/dsh-pet/`：
 
-| 层                   | 路径                                 | 作用                                                                                                  |
-| -------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| 默认配置（只读）     | 包内 `assets/config.jsonc`           | 完整结构参考：宠物列表 / 动画池（idle/turn/drag/clicks/moves/categories）/ 播放权重                   |
-| 用户配置             | `$DSH_HOME/dsh-pet/main-config.json` | 覆盖片段：可整体覆盖 `pets` / `animations` / `animationWeights`，缺省字段回落默认                     |
-| 对话记忆（自动生成） | `$DSH_HOME/dsh-pet/memory.json`      | 对话历史（user/assistant 正文，**全存不删**；每次请求只取最近 `chatMemoryRounds` 轮）。删掉即清空记忆 |
-| 互动记录（自动生成） | `$DSH_HOME/dsh-pet/interactive.json` | 互动碎碎念的吐槽记录（每只宠物保留最近 40 条，独立于对话记忆）。删掉即清空识屏历史               |
-| 用户动画（可选）     | `$DSH_HOME/dsh-pet/main-animation/`  | 放入 `.webm`（VP9-Alpha）即可作为动画播放，**优先于包内素材**（放 `main-animation/webm/` 子目录）     |
+| 层                   | 路径                                  | 作用                                                                                                                                                   |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 默认配置（只读）     | 包内 `assets/config.jsonc`            | 完整结构参考：宠物列表 / 动画池（idle/turn/drag/clicks/moves/categories）/ 播放权重                                                                    |
+| 用户配置             | `$DSH_HOME/dsh-pet/main-config.jsonc` | 覆盖片段：可整体覆盖 `pets` / `animations` / `animationWeights`，缺省字段回落默认                                                                      |
+| 对话记忆（自动生成） | `$DSH_HOME/dsh-pet/memory.json`       | 对话历史（user/assistant 正文，**全存不删**；每次请求只取最近 `chatMemoryRounds` 轮）。删掉即清空记忆                                                  |
+| 用户动画（可选）     | `$DSH_HOME/dsh-pet/main-animation/`   | 放入 `.webm`（VP9-Alpha）即可作为动画播放，**优先于包内素材**（`main-animation/webm/` 子目录；macOS Safari 的 `.mov` 放 `main-animation/mov/` 子目录） |
+| 用户表情包（可选）   | `$DSH_HOME/dsh-pet/memes/`            | 放入 `.png` 即可作为配图，**优先于包内素材**；键（文件名去扩展名）与描述仍需写进配置的 `memes`                                                         |
 
 - 设置页底部「高级配置」显示这些路径；「卸载与存储」列出插件的全部存储位置与卸载命令
 - 自定义动画：把 `xxx.webm` 放进 `main-animation/webm/`，在动画池/分类里写 `"xxx"`，**刷新页面**即可（无需重启 DSH）
-- 格式：`.webm` 需 **VP9 Alpha** 编码（Chrome/Edge/Firefox），与包内素材同规范，普通编码会有黑底
+- 格式：`.webm` 需 **VP9 Alpha** 编码（Chrome/Edge/Firefox），与包内素材同规范，普通编码会有黑底。macOS Safari 用的同名 `.mov`（HEVC-with-Alpha）放 `main-animation/mov/`，会被**自动优先**使用；缺 mov 时自动退回 webm（黑底，不会白屏）
 - 修改用户配置后同样**刷新页面**生效
 - 动画名请对照默认配置填写，避免引用不存在的动画
-- 表情包图片放在**包内** `assets/memes/`（键 = 文件名去扩展名），用户目录不放表情包——加图/换图需要改包内目录，`add`/更新时会被包覆盖；只想去掉某张图，删 config 里 `memes` 对应的键即可（不用动图片文件）
+- 表情包图片按**素材归属**查找（与动画同一套）：`pet/<前缀>-memes/`（种类独占，见下节）→ 用户目录 `$DSH_HOME/dsh-pet/memes/` → 包内 `assets/memes/`。往用户目录放 `xxx.png`，再在 config 的 `memes` 里写 `"xxx": "这张图的描述"`，**刷新页面**即可用（加图/换图不必再改包内目录，也就不会被 `add`/更新覆盖）；只想去掉某张图，删 config 里对应的键即可（不用动图片文件）
 
 ### 🐾 额外宠物（pet pack）——添加新「种类」
 
-默认只能调整主宠物（`config.jsonc` / `main-config.json` 的 `pets`）。要添加**全新种类的宠物**（独立动画池 + 自己的素材），在用户数据根下建 `pet/` 目录：
+默认只能调整主宠物（`config.jsonc` / `main-config.jsonc` 的 `pets`）。要添加**全新种类的宠物**（独立动画池 + 自己的素材），在用户数据根下建 `pet/` 目录：
 
 ```
 $DSH_HOME/dsh-pet/pet/
 ├─ pig-config.json        ← 额外宠物 pig 的配置（命名词干 = 种类名，实例 id 任意）
-└─ pig-animation/         ← pig 自己的动画素材（直接平铺 .webm，仿 main-animation）
-   ├─ 待机.webm
-   └─ 打滚.webm
+├─ pig-animation/         ← pig 自己的动画素材（直接平铺 .webm，仿 main-animation）
+│  ├─ 待机.webm
+│  └─ 打滚.webm
+└─ pig-memes/             ← 可选：pig 自己的表情包（直接平铺 .png，仿用户 memes/）
+   └─ 吃白饭的大肥鱼.png
 ```
 
-每只额外宠物 = 一个 `-config.json`（配置）+ 一个 `-animation/` 目录（素材），同前缀配对，扫描 `pet/` 自动发现（浏览器与桌面同时生效，无需重启）。
+每只额外宠物 = 一个 `-config.json`（配置）+ 一个 `-animation/` 目录（素材），同前缀配对，扫描 `pet/` 自动发现（浏览器与桌面同时生效，无需重启）；`-memes/` 目录可选，有则**独占**该种类的配图（见下节）。
 
-配置文件**与 `main-config.json` / `config.jsonc` 完全同构**——直接复制一份 main 配置、换成自己的动画池，就是一只新宠物。一个 `-config.json` 定义**一个「种类」**（动画池 + 素材目录），`pets` 数组可放该种类的**任意多只实例**（每只独立 size/位置，共享动画池与素材）：
+配置文件**与 `main-config.jsonc` / `config.jsonc` 完全同构**——直接复制一份 main 配置、换成自己的动画池，就是一只新宠物。一个 `-config.json` 定义**一个「种类」**（动画池 + 素材目录），`pets` 数组可放该种类的**任意多只实例**（每只独立 size/位置，共享动画池与素材）：
 
 ```jsonc
-// pet/pig-config.json —— 与 main-config.json 同构的完整配置；animations / animationWeights 必填（不回落全局）
+// pet/pig-config.json —— 与 main-config.jsonc 同构的完整配置；animations / animationWeights 必填（不回落全局）
 {
   "notificationsEnabled": true,
   "pets": [
@@ -207,29 +255,35 @@ $DSH_HOME/dsh-pet/pet/
 
 规则（与主宠物严格隔离，绝不混用）：
 
-- **素材只查自己的**：素材目录名 = 文件名前缀（`pet/pig-config.json` → `pet/pig-animation/`），该种类所有实例共用；动画 URL 为 `/thumb/<前缀>/<名>.webm`，查不到即 404 报错——**绝不落到 `main-animation` 或包内素材**
+- **素材只查自己的**：素材目录名 = 文件名前缀（`pet/pig-config.json` → `pet/pig-animation/`），该种类所有实例共用；动画 URL 为 `/thumb/<前缀>/<名>.webm`，查不到即 404 报错——**绝不落到 `main-animation` 或包内素材**。配图同理：`pet/<前缀>-memes/` 存在时**只查它**（`/pic/memes/<前缀>/<名>.png` 查不到即 404），绝不回落到用户 `memes/` 或包内 `assets/memes/`
 - **动画池不回落全局**：`animations` / `animationWeights` 是该种类的（结构校验与主配置同一套规则）
 - `pets` 数组非空、每只字段（id/size/balanceEnabled/display/position）完整合法、数组内 id 唯一——**id 随意写、数量随意**，与主配置完全一致
-- `notificationsEnabled` / `eventsRefreshSec` 是**全局属性**，不归宠物文件管：写了忽略、不写不报错
+- **用户层的「全局默认」会生效**：`physics` / `confineToScreen` / `whisperImageEnabled` / `chatImageEnabled` / `chatImageLimit` / `chatMemoryRounds` / `whisperModel` / `chatModel` / `eventsRefreshSec` 这 9 个是**用户级成本 / 偏好 / 环境 / 节奏**参数——用户在设置页（写进 `main-config.jsonc`）改一次就对该种类生效；种类文件顶层写了则用自己那份
+- **所有顶层字段都是整段替换**：写了就整段用自己的，缺的子键不会从内置默认补回来（消费端各自兜底：余额周期读不到按 1800、碎碎念按 300）
+- `notificationsEnabled` 是**全局**（只读 `main` 条目那份）：种类文件里写了**不生效**（不报错）
+- `eventsRefreshSec` 内部两个键的**消费端**不同：`.whisper` 按宠物所属条目读（种类文件顶层可覆盖）；`.balance` 只读 `main` 条目（余额是一个账号一份数据，host 只有一个刷新定时器）
 - 配置非法 / 缺少 `-animation/` 目录 / 实例 id 与主宠物冲突 → 加载时显式报错并跳过该宠物（不影响其他宠物）
-- 设置页**不列出**文件宠物（改文件即生效，刷新可见）；设置页保存/恢复默认不会把它们写进 `main-config.json`
+- 设置页**不列出**文件宠物（改文件即生效，刷新可见）；设置页保存/同步不会把它们写进 `main-config.jsonc`
 - 添加/修改/删除 → 刷新页面（浏览器）或重启 Helper（桌面）生效
 
 ## 🗑️ 卸载
 
 ```sh
+# dsh web：--profile 填 web
 dsh plugin --profile web remove dsh-pet
 ```
 
+桌面应用（Electron 版）在应用内「插件管理」页卸载。
+
 插件在本机落下的全部位置（设置页「卸载与存储」区块也列出这些，且路径按你的机器实时解析）：
 
-- `$DSH_HOME/dsh-pet/` —— 插件用户数据：自定义配置 `main-config.json`、对话记忆 `memory.json`、自定义动画素材 `main-animation/`、文件宠物 `pet/`
+- `$DSH_HOME/dsh-pet/` —— 插件用户数据：自定义配置 `main-config.jsonc`、对话记忆 `memory.json`、自定义动画素材 `main-animation/`、自定义表情包 `memes/`、文件宠物 `pet/`
 - `$DSH_HOME/electron/` —— 桌面宠物用的 Electron 运行时（体积较大；删除后下次启用桌面模式会自动重新下载）
 - `%APPDATA%\dsh-pet-electron-helper\` —— 桌面宠物窗口缓存与主屏缩放缓存（macOS：`~/Library/Application Support/`；Linux：`$XDG_CONFIG_HOME` 或 `~/.config/`；可删，会自动重建）
 - `%LOCALAPPDATA%\electron\Cache\` —— Electron 安装包下载缓存（macOS：`~/Library/Caches/electron`；Linux：`$XDG_CACHE_HOME` 或 `~/.cache/`；可删，需要时会重新下载）
 - 插件本体 —— 由 DSH 管理，用上面的命令移除，不要手删
 
-删之前先退出 DSH（桌面宠物随之退出）。缓存类删了无影响；`$DSH_HOME/dsh-pet/` 删了会丢配置与对话记忆（想保留就先备份 `main-config.json`）。
+删之前先退出 DSH（桌面宠物随之退出）。缓存类删了无影响；`$DSH_HOME/dsh-pet/` 删了会丢配置与对话记忆（想保留就先备份 `main-config.jsonc`）。
 
 ## 🖥️ 运行效果
 
@@ -255,7 +309,7 @@ dsh plugin --profile web remove dsh-pet
   <img src="https://raw.githubusercontent.com/PC2005-cloud/dsh-pet/main/dsh-pet/assets/preview/beishubiao-tuozhuai-xuankong-fankui.gif" width="160" alt="被鼠标拖拽悬空反馈" title="被鼠标拖拽悬空反馈">
 </p>
 
-全部动画见仓库：`dsh-pet/assets/webm/`（VP9-alpha，唯一发布格式）。
+全部动画见仓库：`dsh-pet/assets/webm/`（VP9-alpha，包内唯一发布的格式）。macOS 的 HEVC-alpha `.mov` 单独发布在 [assets-mov](https://github.com/PC2005-cloud/dsh-pet/releases/tag/assets-mov)，按「🖥️ macOS 使用 mov」两步放好即自动生效。
 
 ## 📚 完整项目（不止是插件）
 

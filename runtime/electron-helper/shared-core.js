@@ -12,6 +12,7 @@ const HIT_BOX = {
 	y1: 335
 };
 const DRAG_THRESHOLD = 5;
+const SLINGSHOT_DOUBLE_MS = 200;
 const PET_REF_WIDTH = 462;
 const ANIMATION_EXT = ".webm";
 
@@ -52,10 +53,12 @@ const pickWeightedCategory = (categories, facing) => {
 	}
 	return eligible[eligible.length - 1];
 };
-const rollKind = (roll, w) => {
-	const topEnd = (w.idle + w.turn + w.move) / 100;
+const rollKind = (roll, w, opts) => {
+	const turn = opts?.fixed ? 0 : w.turn;
+	const move = opts?.fixed ? 0 : w.move;
+	const topEnd = (w.idle + turn + move) / 100;
 	if (roll < w.idle / 100) return "idle";
-	if (roll < (w.idle + w.turn) / 100) return "turn";
+	if (roll < (w.idle + turn) / 100) return "turn";
 	if (roll < topEnd) return "move";
 	return "action";
 };
@@ -215,134 +218,249 @@ const anchorPixel = (o) => {
 };
 
 //#endregion
-//#region src/shared/balance.ts
-const TIMEOUT_MS$2 = 2e4;
-const RETRIES$1 = 2;
-/** 带超时 + 重试的 GET（host 已内置重试，这里再兜底网络抖动）。
-*  浏览器传默认相对路径；桌面模式（Electron，file:// 页面）传绝对 URL。 */
-async function getWithRetry$1(url) {
-	let last;
-	for (let i = 0; i <= RETRIES$1; i++) {
-		try {
-			const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS$2) });
-			if (res.ok) return res;
-			last = new Error("HTTP " + res.status);
-		} catch (e) {
-			last = e;
-		}
-		if (i < RETRIES$1) await new Promise((r) => setTimeout(r, 600));
-	}
-	throw last instanceof Error ? last : new Error(String(last));
+//#region src/shared/balance/tone.ts
+const QUOTA_WARN_PERCENT = 70;
+const QUOTA_CRIT_PERCENT = 90;
+function quotaTone(percent) {
+	if (percent >= QUOTA_CRIT_PERCENT) return "crit";
+	if (percent >= QUOTA_WARN_PERCENT) return "warn";
+	return "ok";
 }
-async function fetchBalanceState(baseUrl = "/dsh-pet-7340/balance") {
-	const res = await getWithRetry$1(baseUrl);
-	const raw = await res.json().catch(() => null);
-	if (!raw || typeof raw !== "object") throw new Error("dsh-pet: 余额响应非法");
-	const provider = String(raw.provider ?? "unknown");
-	if (raw.ok !== true) {
-		const reason = raw.reason === "unsupported" || raw.reason === "credential-missing" || raw.reason === "fetch-error" ? raw.reason : "fetch-error";
+
+//#endregion
+//#region src/shared/balance/parse.ts
+/**
+* 可选数字：缺省 → undefined；出现但非法 → null（调用方据此整拍跳过——不把 NaN/字符串送进展示层）。
+*/
+function optNum(value) {
+	if (value === void 0 || value === null) return void 0;
+	const n = Number(value);
+	return Number.isFinite(n) ? n : null;
+}
+function toBalanceState(raw) {
+	if (!raw || typeof raw !== "object") return null;
+	const r = raw;
+	const provider = String(r.provider ?? "unknown");
+	if (r.ok !== true) {
+		const reason = r.reason === "unsupported" || r.reason === "credential-missing" || r.reason === "fetch-error" ? r.reason : "fetch-error";
 		return {
 			provider,
 			ok: false,
 			reason,
-			message: typeof raw.message === "string" ? raw.message : void 0
+			message: typeof r.message === "string" ? r.message : void 0
 		};
 	}
-	if (raw.kind === "opencode") {
-		const d = raw.data;
-		if (!d || typeof d !== "object") throw new Error("dsh-pet: opencode 数据非法");
-		const rolling = Number(d.rolling);
-		const weekly = Number(d.weekly);
-		const monthly = Number(d.monthly);
-		if (![
-			rolling,
-			weekly,
-			monthly
-		].every(Number.isFinite)) throw new Error("dsh-pet: opencode 百分比非数字");
+	const d = r.data;
+	if (!d || typeof d !== "object") return null;
+	if (r.shape === "windows") {
+		const monthly = optNum(d.monthly);
+		const rolling = optNum(d.rolling);
+		const weekly = optNum(d.weekly);
+		const rollingCapUsd = optNum(d.rollingCapUsd);
+		const weeklyCapUsd = optNum(d.weeklyCapUsd);
+		const monthlyCapUsd = optNum(d.monthlyCapUsd);
+		if (monthly === void 0 || monthly === null) return null;
+		if (rolling === null || weekly === null || rollingCapUsd === null || weeklyCapUsd === null || monthlyCapUsd === null) return null;
 		return {
 			provider,
-			kind: "opencode",
+			shape: "windows",
 			ok: true,
 			rolling,
 			weekly,
 			monthly,
+			rollingCapUsd,
+			weeklyCapUsd,
+			monthlyCapUsd,
+			rollingLabel: typeof d.rollingLabel === "string" && d.rollingLabel.length > 0 ? d.rollingLabel : void 0,
 			rollingResetsAt: typeof d.rollingResetsAt === "string" ? d.rollingResetsAt : void 0,
 			weeklyResetsAt: typeof d.weeklyResetsAt === "string" ? d.weeklyResetsAt : void 0,
 			monthlyResetsAt: typeof d.monthlyResetsAt === "string" ? d.monthlyResetsAt : void 0
 		};
 	}
-	if (raw.kind === "deepseek") {
-		const d = raw.data;
-		if (!d || typeof d !== "object") throw new Error("dsh-pet: deepseek 数据非法");
+	if (r.shape === "money") {
+		const raw$1 = Array.isArray(d.wallets) ? d.wallets : [];
+		const wallets = [];
+		for (const item of raw$1) {
+			if (!item || typeof item !== "object") continue;
+			const w = item;
+			if (typeof w.currency !== "string" || w.currency.length === 0) continue;
+			if (typeof w.total !== "string" || w.total.length === 0) continue;
+			wallets.push({
+				currency: w.currency,
+				total: w.total,
+				granted: typeof w.granted === "string" && w.granted.length > 0 ? w.granted : "0.00",
+				toppedUp: typeof w.toppedUp === "string" && w.toppedUp.length > 0 ? w.toppedUp : "0.00",
+				fullBalance: typeof w.fullBalance === "string" && w.fullBalance.length > 0 ? w.fullBalance : void 0
+			});
+		}
+		if (wallets.length === 0) return null;
 		return {
 			provider,
-			kind: "deepseek",
+			shape: "money",
 			ok: true,
-			currency: typeof d.currency === "string" ? d.currency : void 0,
-			total: typeof d.total === "string" ? d.total : void 0,
-			granted: typeof d.granted === "string" ? d.granted : void 0,
-			toppedUp: typeof d.toppedUp === "string" ? d.toppedUp : void 0
+			wallets,
+			tier: d.tier === "peak" || d.tier === "idle" ? d.tier : void 0
 		};
 	}
-	throw new Error("dsh-pet: 余额 kind 非法");
-}
-async function fetchTriggerCount(baseUrl = "/dsh-pet-7340/balance/trigger") {
-	const res = await fetch(baseUrl, { cache: "no-store" });
-	if (!res.ok) return -1;
-	const data = await res.json().catch(() => null);
-	return data && typeof data.count === "number" ? data.count : -1;
-}
-const DEEPSEEK_FULL_BALANCE_CNY = 20;
-function balancePercent(v) {
-	if (v.kind === "opencode") return Math.max(v.rolling ?? 0, v.weekly ?? 0, v.monthly ?? 0);
-	if (v.kind === "deepseek") {
-		const total = Number(v.total);
-		if (!Number.isFinite(total)) return void 0;
-		const remaining = Math.max(0, total) / DEEPSEEK_FULL_BALANCE_CNY * 100;
-		return Math.max(0, Math.min(100, 100 - remaining));
+	if (r.shape === "points") {
+		if (typeof d.unit !== "string" || d.unit.length === 0) return null;
+		if (typeof d.total !== "string" || d.total.length === 0) return null;
+		return {
+			provider,
+			shape: "points",
+			ok: true,
+			points: {
+				unit: d.unit,
+				total: d.total,
+				full: typeof d.full === "string" && d.full.length > 0 ? d.full : void 0
+			}
+		};
 	}
-	return void 0;
+	return null;
 }
-function balanceEventIndex(p) {
-	if (p === 100) return 5;
-	const i = Math.floor(p / 20);
-	return i < 5 ? i : 4;
+
+//#endregion
+//#region src/shared/balance/handlers/money.ts
+/**
+* money：各币种按**自己的基准**（`fullBalance`）算「剩余比例」，再相加折算成已用百分比。
+* 没有基准的币种跳过（不参与折算，不替它猜一个）；一个带基准的都没有 → undefined（不播档位）。
+*/
+function moneyPercent(v) {
+	let remaining = 0;
+	let based = 0;
+	for (const w of v.wallets ?? []) {
+		const total = Number(w.total);
+		const full = Number(w.fullBalance);
+		if (!Number.isFinite(total) || !Number.isFinite(full) || full <= 0) continue;
+		remaining += total / full;
+		based++;
+	}
+	if (based === 0) return void 0;
+	return Math.max(0, Math.min(100, 100 - remaining * 100));
 }
-const OPENCODE_QUOTA_USD = {
-	rolling: 12,
-	weekly: 30,
-	monthly: 60
+/**
+* money：一行「余额（峰/谷）¥x.xx」。
+*
+* 只显示 `total !== 0` 的币种（**负数要显示**——透支是真的欠钱；正好 0 的不占地方），
+* CNY 优先，用符号拼、`/` 分隔；全都为 0 时兜底显示主币种 ¥0.00（否则气泡会空一行）。
+* 档位装饰（峰/谷）只有提供该计价规则的服务商才有；没有就不加括号那一段。
+*/
+function moneyRows(v) {
+	const visible = (v.wallets ?? []).filter((w) => Number(w.total) !== 0).sort((a, b) => (a.currency === "CNY" ? 0 : 1) - (b.currency === "CNY" ? 0 : 1));
+	const amount = visible.length > 0 ? visible.map((w) => (w.currency === "USD" ? "$" : "¥") + w.total).join("/") : "¥0.00";
+	if (!v.tier) return [{
+		role: "label",
+		text: "余额 " + amount
+	}];
+	return [
+		{
+			role: "label",
+			text: "余额（"
+		},
+		{
+			role: "tier",
+			tier: v.tier,
+			text: v.tier === "peak" ? "峰" : "谷"
+		},
+		{
+			role: "label",
+			text: "）" + amount
+		}
+	];
+}
+const moneyHandler = {
+	percent: moneyPercent,
+	rows: moneyRows
 };
+
+//#endregion
+//#region src/shared/balance/handlers/points.ts
+/**
+* points：与 money 同一套「按基准折算」的数学，数据来自 `points` 而非 `wallets`。
+* 没有基准 / 基准非法 → undefined（不播档位，不替服务商猜一个）。
+*/
+function pointsPercent(v) {
+	const total = Number(v.points?.total);
+	const full = Number(v.points?.full);
+	if (!Number.isFinite(total) || !Number.isFinite(full) || full <= 0) return void 0;
+	return Math.max(0, Math.min(100, 100 - total / full * 100));
+}
+/**
+* points：一行「余额 800 积分」。
+* 单位是数据带出的后缀，**绝不套货币符号**（`currency` 那套 $/¥ 判断只属于 money）。
+* 0 也照常显示：0 积分是真实读数。
+*/
+function pointsRows(v) {
+	const p = v.points;
+	if (!p) return [{
+		role: "label",
+		text: "积分数据不可用"
+	}];
+	return [{
+		role: "label",
+		text: "余额 " + p.total + " " + p.unit
+	}];
+}
+const pointsHandler = {
+	percent: pointsPercent,
+	rows: pointsRows
+};
+
+//#endregion
+//#region src/shared/balance/handlers/windows.ts
 const WINDOW_LABELS = {
-	rolling: "5h",
 	weekly: "周",
 	monthly: "月"
 };
+const DEFAULT_ROLLING_LABEL = "5h";
+/** 窗口展示名：滚动窗取服务商自报值（缺省 5h），周/月走固定表 */
+function windowLabel(v, w) {
+	if (w === "rolling") return v.rollingLabel ?? DEFAULT_ROLLING_LABEL;
+	return WINDOW_LABELS[w];
+}
+/** 各窗口的满额度（USD）：全部来自数据（展示层不写死任何服务商的额度） */
+function windowQuotas(v) {
+	return {
+		rolling: v.rollingCapUsd,
+		weekly: v.weeklyCapUsd,
+		monthly: v.monthlyCapUsd
+	};
+}
 function urgentWindow(v) {
-	if (v.kind !== "opencode") return void 0;
-	const windows = [
-		"rolling",
-		"weekly",
-		"monthly"
-	];
+	if (v.shape !== "windows") return void 0;
+	const quotas = windowQuotas(v);
 	const resets = {
 		rolling: v.rollingResetsAt,
 		weekly: v.weeklyResetsAt,
 		monthly: v.monthlyResetsAt
 	};
+	const present = [
+		"rolling",
+		"weekly",
+		"monthly"
+	].filter((w) => v[w] !== void 0);
+	if (present.length === 0) return void 0;
+	const allQuotas = present.every((w) => {
+		const quota = quotas[w];
+		return quota !== void 0 && quota > 0;
+	});
 	let best;
-	for (const w of windows) {
+	for (const w of present) {
 		const percent = v[w] ?? 0;
-		const quota = OPENCODE_QUOTA_USD[w];
-		const remaining = quota * (100 - percent) / 100;
+		const quota = quotas[w];
 		const cand = {
-			label: WINDOW_LABELS[w],
+			label: windowLabel(v, w),
 			percent,
 			quotaUsd: quota,
-			remainingUsd: remaining,
+			remainingUsd: allQuotas && quota !== void 0 ? quota * (100 - percent) / 100 : void 0,
 			resetsAt: resets[w]
 		};
-		if (best === void 0 || remaining < best.remainingUsd) best = cand;
+		if (best === void 0) {
+			best = cand;
+			continue;
+		}
+		const moreUrgent = allQuotas ? (cand.remainingUsd ?? 0) < (best.remainingUsd ?? 0) : cand.percent > best.percent;
+		if (moreUrgent) best = cand;
 	}
 	return best;
 }
@@ -356,19 +474,86 @@ function resetInText(iso) {
 	if (hoursF >= 96) return (Math.round(hoursF / 24 * 10) / 10).toFixed(1) + " 天";
 	return Math.max(.1, Math.round(hoursF * 10) / 10).toFixed(1) + " 小时";
 }
-function deepseekPricingTier(now = new Date()) {
-	const parts = new Intl.DateTimeFormat("en-US", {
-		timeZone: "Asia/Shanghai",
-		weekday: "short",
-		hour: "2-digit",
-		hourCycle: "h23"
-	}).formatToParts(now);
-	const pick$1 = (type) => parts.find((p) => p.type === type)?.value;
-	const weekday = pick$1("weekday");
-	const hour = Number(pick$1("hour"));
-	if (weekday === "Sat" || weekday === "Sun") return "idle";
-	return hour >= 9 && hour < 12 || hour >= 14 && hour < 18 ? "peak" : "idle";
+/** windows：三窗口取最大（只有月窗口时就是它自己） */
+function windowsPercent(v) {
+	return Math.max(v.rolling ?? 0, v.weekly ?? 0, v.monthly ?? 0);
 }
+/** windows：两行 —— 最紧迫窗口的「已用 N%」+ 重置倒计时 */
+function windowsRows(v) {
+	const w = urgentWindow(v);
+	if (!w) return [{
+		role: "label",
+		text: "额度数据不可用"
+	}];
+	const reset = resetInText(w.resetsAt);
+	return [{
+		role: "label",
+		text: w.label + "额度已用 " + Math.round(w.percent) + "%"
+	}, {
+		role: "sub",
+		text: reset ? reset + "重置" : "已重置"
+	}];
+}
+/**
+* windows：展开态每个存在窗口一行 —— 窗口名 + 进度条 + 已用百分比 + 重置倒计时。
+* 只列**存在**的窗口：`rolling` / `weekly` 缺省 = 该服务商没有这个窗口，不补 0、不画空条。
+*/
+function windowsDetail(v) {
+	const resets = {
+		rolling: v.rollingResetsAt,
+		weekly: v.weeklyResetsAt,
+		monthly: v.monthlyResetsAt
+	};
+	const rows = [];
+	for (const w of [
+		"rolling",
+		"weekly",
+		"monthly"
+	]) {
+		const percent = v[w];
+		if (percent === void 0) continue;
+		const reset = resetInText(resets[w]);
+		const usedText = Math.round(percent) + "%";
+		const resetText = reset === "" ? "已重置" : reset + "重置";
+		rows.push({
+			role: "quota",
+			text: windowLabel(v, w) + " " + usedText + " " + resetText,
+			label: windowLabel(v, w),
+			percent,
+			tone: quotaTone(percent),
+			usedText,
+			resetText
+		});
+	}
+	return rows.length > 0 ? rows : windowsRows(v);
+}
+const windowsHandler = {
+	percent: windowsPercent,
+	rows: windowsRows,
+	detail: windowsDetail
+};
+
+//#endregion
+//#region src/shared/balance/handlers/index.ts
+const HANDLERS = {
+	windows: windowsHandler,
+	money: moneyHandler,
+	points: pointsHandler
+};
+
+//#endregion
+//#region src/shared/balance/percent.ts
+function balancePercent(v) {
+	return HANDLERS[v.shape].percent(v);
+}
+function balanceEventIndex(p) {
+	if (p === 100) return 5;
+	const i = Math.floor(p / 20);
+	return i < 5 ? i : 4;
+}
+
+//#endregion
+//#region src/shared/balance/view.ts
 /** 不可用状态的气泡行（显式说明原因，绝不伪造数字）：
 *  - unsupported：服务商未登记查询接口（配置事实，不是故障）→ 报出 provider id，便于自查"当前到底是谁"
 *  - credential-missing：缺凭证 → 次要行放 host 报的凭证名（不含 message 时不留空行）
@@ -394,47 +579,20 @@ function unavailableRows(state) {
 		role: "sub",
 		text: state.message ?? ""
 	}];
-	return rows.filter((r) => r.text !== "");
+	return rows.filter((r) => r.role !== "quota" && r.text !== "");
 }
 function balanceBubbleView(state) {
-	if (state.ok) {
-		if (state.kind === "opencode") {
-			const w = urgentWindow(state);
-			if (w) {
-				const reset = resetInText(w.resetsAt);
-				const rows = [{
-					role: "label",
-					text: w.label + "额度已用 " + Math.round(w.percent) + "%"
-				}, {
-					role: "sub",
-					text: reset ? reset + "重置" : "已重置"
-				}];
-				return rows;
-			}
-			return [{
-				role: "label",
-				text: "额度数据不可用"
-			}];
-		}
-		const tier = deepseekPricingTier();
-		return [
-			{
-				role: "label",
-				text: "余额（"
-			},
-			{
-				role: "tier",
-				tier,
-				text: tier === "peak" ? "峰" : "谷"
-			},
-			{
-				role: "label",
-				text: "）¥" + (state.total ?? "-")
-			}
-		];
-	}
-	return unavailableRows(state);
+	if (!state.ok) return unavailableRows(state);
+	return HANDLERS[state.shape].rows(state);
 }
+function balanceDetailView(state) {
+	if (!state.ok) return unavailableRows(state);
+	const handler = HANDLERS[state.shape];
+	return handler.detail ? handler.detail(state) : handler.rows(state);
+}
+
+//#endregion
+//#region src/shared/balance/notice.ts
 function decideBalanceNotice(state, lastKey, explicit) {
 	if (state.ok) return {
 		show: false,
@@ -449,59 +607,25 @@ function decideBalanceNotice(state, lastKey, explicit) {
 
 //#endregion
 //#region src/shared/whisper.ts
-const TIMEOUT_MS$1 = 3e4;
-const RETRIES = 2;
-/** 带超时 + 重试的 GET（host 生成 LLM 调用可能较慢，超时放宽；桌面 file:// 页面需绝对 URL） */
-async function getWithRetry(url) {
-	let last;
-	for (let i = 0; i <= RETRIES; i++) {
-		try {
-			const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS$1) });
-			if (res.ok) return res;
-			last = new Error("HTTP " + res.status);
-		} catch (e) {
-			last = e;
-		}
-		if (i < RETRIES) await new Promise((r) => setTimeout(r, 800));
-	}
-	throw last instanceof Error ? last : new Error(String(last));
+function whisperBubbleView(state) {
+	if (state.ok) return [{
+		role: "label",
+		text: state.text
+	}];
+	const msg = state.reason === "provider-missing" ? "当前对话未配置模型，碎碎念不可用" : "碎碎念生成失败" + (state.message ? "：" + state.message : "");
+	return [{
+		role: "label",
+		text: msg
+	}];
 }
-async function fetchWhisperState(baseUrl = "/dsh-pet-7340/whisper") {
-	const res = await getWithRetry(baseUrl);
-	const raw = await res.json().catch(() => null);
-	if (!raw || typeof raw !== "object") throw new Error("dsh-pet: 碎碎念响应非法");
-	if (raw.ok !== true) return {
-		ok: false,
-		reason: raw.reason === "provider-missing" ? "provider-missing" : "generate-error",
-		message: typeof raw.message === "string" ? raw.message : void 0
-	};
-	const text = typeof raw.text === "string" ? raw.text.trim() : "";
-	const ts = Number(raw.ts);
-	if (!text || !Number.isFinite(ts)) throw new Error("dsh-pet: 碎碎念数据非法");
-	const image = typeof raw.image === "string" && raw.image.trim() ? raw.image.trim() : void 0;
-	return image ? {
-		ok: true,
-		text,
-		image,
-		ts
-	} : {
-		ok: true,
-		text,
-		ts
-	};
-}
-function memeImageUrl(name, base = "/dsh-pet-7340") {
-	return base + "/pic/memes/" + encodeURIComponent(name) + ".png";
+function memeImageUrl(name, base = "/dsh-pet-7340", assetRoot = "") {
+	const root = String(assetRoot ?? "").trim();
+	const prefix = root ? "/pic/memes/" + encodeURIComponent(root) : "/pic/memes";
+	return base + prefix + "/" + encodeURIComponent(name) + ".png";
 }
 const MEME_IMG_CLASS = "pet-bub-img";
 const MEME_BUBBLE_CLASS = "has-img";
-const MEME_BUBBLE_CSS = [
-	".pet-bub-img{display:block;width:calc(var(--dsh-pet-size,var(--pet-size,462px))*0.34);height:auto;",
-	"border-radius:calc(var(--dsh-pet-size,var(--pet-size,462px))*0.026);",
-	"margin:0 auto calc(var(--dsh-pet-size,var(--pet-size,462px))*0.017);object-fit:cover;",
-	"pointer-events:none;user-select:none}",
-	".pet-bubble.has-img,.dsh-pet-bubble.has-img{min-width:0}"
-].join("");
+const MEME_BUBBLE_CSS = [".pet-bub-img{--m:var(--f,calc(var(--dsh-pet-size,var(--pet-size,462px))*0.0455));display:block;width:calc(var(--m)*7.4725);max-width:100%;height:auto;border-radius:calc(var(--m)*0.5714);margin:0 auto calc(var(--m)*0.3736);object-fit:cover;pointer-events:none;user-select:none}", ".pet-bubble.has-img,.dsh-pet-bubble.has-img{min-width:0}"].join("");
 /** 只注入一次（两端共用；页面已有同一标记则跳过） */
 let memeCssInjected = false;
 function injectMemeBubbleCss() {
@@ -514,29 +638,25 @@ function injectMemeBubbleCss() {
 	tag.textContent = MEME_BUBBLE_CSS;
 	document.head.appendChild(tag);
 }
-function createMemeImage(name, base = "/dsh-pet-7340") {
+function createMemeImage(name, base = "/dsh-pet-7340", assetRoot = "") {
 	const key = String(name ?? "").trim();
 	if (!key) return null;
 	injectMemeBubbleCss();
 	const img = document.createElement("img");
 	img.className = MEME_IMG_CLASS;
-	img.src = memeImageUrl(key, base);
+	img.src = memeImageUrl(key, base, assetRoot);
 	img.alt = key;
 	return img;
 }
-function fetchWhisperTrigger(baseUrl = "/dsh-pet-7340/whisper/trigger") {
-	return fetchWhisperState(baseUrl);
-}
-function whisperBubbleView(state) {
-	if (state.ok) return [{
-		role: "label",
-		text: state.text
-	}];
-	const msg = state.reason === "provider-missing" ? "当前对话未配置模型，碎碎念不可用" : "碎碎念生成失败" + (state.message ? "：" + state.message : "");
-	return [{
-		role: "label",
-		text: msg
-	}];
+function createMemeImageFromUrl(url) {
+	const href = String(url ?? "").trim();
+	if (!href) return null;
+	injectMemeBubbleCss();
+	const img = document.createElement("img");
+	img.className = MEME_IMG_CLASS;
+	img.src = href;
+	img.alt = "";
+	return img;
 }
 
 //#endregion
@@ -559,14 +679,93 @@ function flattenConfigPets(merged) {
 			animationWeights: conf.animationWeights,
 			eventsRefreshSec: conf.eventsRefreshSec,
 			physics: conf.physics,
+			font: conf.font,
+			confineToScreen: conf.confineToScreen,
 			workStatusTexts: conf.workStatusTexts,
-			interactiveIntervalSec: conf.interactiveIntervalSec,
-			interactiveMaxChars: conf.interactiveMaxChars,
+			whisperModel: conf.whisperModel,
+			chatModel: conf.chatModel,
+			interactiveIntervalSec: typeof conf.interactiveIntervalSec === "number" ? conf.interactiveIntervalSec : void 0,
+			interactiveMaxChars: typeof conf.interactiveMaxChars === "number" ? conf.interactiveMaxChars : void 0,
 			assetRoot: entry,
 			extra: entry !== "main"
 		});
 	}
 	return out;
+}
+
+//#endregion
+//#region src/shared/fonts.ts
+const FONT_PRESETS = [
+	{
+		id: "candy",
+		stack: "\"ShangshouSoftCandy\",\"Yuanti SC\",\"YouYuan\",\"幼圆\",\"Comic Sans MS\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif"
+	},
+	{
+		id: "yahei",
+		stack: "\"Microsoft YaHei\",\"PingFang SC\",sans-serif"
+	},
+	{
+		id: "youyuan",
+		stack: "\"YouYuan\",\"Yuanti SC\",sans-serif"
+	},
+	{
+		id: "kaiti",
+		stack: "\"KaiTi\",\"STKaiti\",serif"
+	},
+	{
+		id: "simsun",
+		stack: "\"SimSun\",\"Songti SC\",serif"
+	},
+	{
+		id: "comic",
+		stack: "\"Comic Sans MS\",\"Comic Sans\",cursive"
+	},
+	{
+		id: "system",
+		stack: "system-ui,sans-serif"
+	}
+];
+const FONT_SIZE_MIN = 4;
+const FONT_SIZE_MAX = 200;
+const DEFAULT_FONT = {
+	family: "candy",
+	size: 21,
+	followPet: true
+};
+function fontStackOf(id) {
+	return (FONT_PRESETS.find((p) => p.id === id) ?? FONT_PRESETS[0]).stack;
+}
+const FONT_REF_SIZE = 462;
+const BUBBLE_FONT_BASE_PX = .0455 * FONT_REF_SIZE;
+const TIP_FONT_BASE_PX = .026 * FONT_REF_SIZE;
+function resolveFontPx(font, size) {
+	const own = Number(font?.size);
+	const ratio = Number.isFinite(own) && own > 0 ? own / DEFAULT_FONT.size : 1;
+	const w = Number(size);
+	const follow = font?.followPet !== false;
+	const scale = follow && Number.isFinite(w) && w > 0 ? w / FONT_REF_SIZE : 1;
+	return {
+		bubble: BUBBLE_FONT_BASE_PX * ratio * scale,
+		tip: TIP_FONT_BASE_PX * ratio * scale
+	};
+}
+const BUBBLE_OVERLAP_RATIO = .108;
+const BUBBLE_METRICS = {
+	lineHeight: 1.6,
+	padY: .4835,
+	subScale: .7692,
+	imgWidth: 7.4725,
+	imgMargin: .3736,
+	imgMaxRatio: 1
+};
+function bubbleMaxHeightPx(font, size) {
+	const f = resolveFontPx(font, size).bubble;
+	const m = BUBBLE_METRICS;
+	return m.padY * 2 * f + m.lineHeight * f + m.lineHeight * m.subScale * f + m.imgWidth * m.imgMaxRatio * f + m.imgMargin * f;
+}
+function bubbleTopMarginPx(font, size) {
+	const overlap = (Number(size) || 0) * BUBBLE_OVERLAP_RATIO;
+	return Math.max(0, Math.ceil(bubbleMaxHeightPx(font, size) - overlap));
 }
 
 //#endregion
@@ -634,6 +833,74 @@ function frameToToast(frame) {
 
 //#endregion
 //#region src/shared/menu.ts
+const displayMenuBranch = () => ({
+	label: "显示位置",
+	children: [
+		{
+			label: "仅网页",
+			action: "set-display",
+			display: "web"
+		},
+		{
+			label: "仅桌面",
+			action: "set-display",
+			display: "desktop"
+		},
+		{
+			label: "两者",
+			action: "set-display",
+			display: "both"
+		},
+		{
+			label: "都不",
+			action: "set-display",
+			display: "none"
+		}
+	]
+});
+const MORE_MENU_LABEL = "更多";
+function readMenuItems(data) {
+	if (!data || typeof data !== "object") return [];
+	const items = data.items;
+	if (!Array.isArray(items)) return [];
+	const out = [];
+	for (const item of items) {
+		if (!item || typeof item !== "object") continue;
+		const owner = item.owner;
+		const label = item.label;
+		if (typeof owner === "string" && owner !== "" && typeof label === "string" && label !== "") out.push({
+			owner,
+			label
+		});
+	}
+	return out;
+}
+function buildMoreBranch(items) {
+	const groups = new Map();
+	for (const item of items) {
+		const list = groups.get(item.owner);
+		if (list) list.push(item.label);
+		else groups.set(item.owner, [item.label]);
+	}
+	const children = [];
+	for (const [owner, labels] of groups) if (labels.length === 1) children.push({
+		label: labels[0],
+		action: "third-party",
+		owner
+	});
+	else children.push({
+		label: owner,
+		children: labels.map((label) => ({
+			label,
+			action: "third-party",
+			owner
+		}))
+	});
+	return children.length > 0 ? {
+		label: MORE_MENU_LABEL,
+		children
+	} : null;
+}
 /** 事件名 → 分类标签（无映射时用事件名本身） */
 const EVENT_LABELS = {
 	balance: "余额档位",
@@ -686,7 +953,7 @@ const MENU_CSS = [
 	".dsh-pet-menu{position:fixed;left:0;top:0;z-index:2147483000;color:#2b2b2b;font-size:13px;line-height:1.5;",
 	"font-family:'Microsoft YaHei UI','Segoe UI','PingFang SC',sans-serif;user-select:none;pointer-events:auto}",
 	".dsh-pet-menu,.dsh-pet-menu *{box-sizing:border-box}",
-	".dsh-pet-menu-column{position:absolute;min-width:150px;max-width:240px;padding:4px;",
+	".dsh-pet-menu-column{position:absolute;min-width:150px;max-width:300px;padding:4px;",
 	"background:rgba(255,255,255,.98);border:1px solid rgba(0,0,0,.12);border-radius:8px;",
 	"box-shadow:0 8px 28px rgba(0,0,0,.2);max-height:min(62vh,460px);overflow-y:auto;",
 	"scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.22) transparent}",
@@ -701,6 +968,7 @@ const MENU_CSS = [
 	"gap:14px;padding:5px 12px;border-radius:6px;white-space:nowrap;cursor:default}",
 	".dsh-pet-menu-item:hover{background:rgba(43,99,255,.14)}",
 	".dsh-pet-menu-item>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}",
+	".dsh-pet-menu-hint{color:#9aa0a6;font-size:12px;flex:none;white-space:nowrap}",
 	".dsh-pet-menu-arrow{color:#9aa0a6;font-size:12px;flex:none}"
 ].join("");
 function isBranchNode(n) {
@@ -778,6 +1046,12 @@ function mountContextMenu(opts) {
 				const label = document.createElement("span");
 				label.textContent = node.label;
 				item.appendChild(label);
+				if (node.hint) {
+					const hint = document.createElement("span");
+					hint.className = "dsh-pet-menu-hint";
+					hint.textContent = node.hint;
+					item.appendChild(hint);
+				}
 				item.addEventListener("click", (e) => {
 					e.preventDefault();
 					e.stopPropagation();
@@ -856,25 +1130,13 @@ async function sendChat(baseUrl, text) {
 		reason: o.reason === "provider-missing" || o.reason === "generate-error" || o.reason === "config-error" ? o.reason : "bad-request",
 		message: typeof o.message === "string" ? o.message : void 0
 	};
-	const reply = typeof o.reply === "string" ? o.reply.trim() : "";
-	if (!reply) throw new Error("dsh-pet: 对话回复非法");
-	const image = typeof o.image === "string" && o.image.trim() ? o.image.trim() : void 0;
-	return image ? {
-		ok: true,
-		reply,
-		image,
-		ts: Number(o.ts) || 0
-	} : {
-		ok: true,
-		reply,
-		ts: Number(o.ts) || 0
-	};
+	return { ok: true };
 }
 const CHAT_CSS = [
 	".dsh-pet-chat{position:fixed;z-index:2147483001;width:160px;max-width:80vw;",
 	"background:rgba(255,255,255,.98);border:1px solid rgba(0,0,0,.12);border-radius:10px;",
 	"box-shadow:0 10px 32px rgba(0,0,0,.22);color:#2b2b2b;font-size:14px;line-height:1.5;",
-	"font-family:'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif;",
+	"font-family:var(--dsh-pet-font-family,'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif);",
 	"user-select:none}",
 	".dsh-pet-chat *{box-sizing:border-box}",
 	".dsh-pet-chat-input{display:block;width:100%;border:none;outline:none;background:transparent;",
@@ -900,9 +1162,9 @@ function injectChatCss() {
 }
 function mountChatDialog(opts) {
 	injectChatCss();
-	const { petId, x, y, onReply, onClose, clamp } = opts;
+	const { petId, surface, x, y, onSent, onClose, clamp } = opts;
 	const baseUrl = opts.baseUrl ?? "/dsh-pet-7340/chat";
-	const withPet = baseUrl + "?pet=" + encodeURIComponent(petId);
+	const withPet = baseUrl + "?pet=" + encodeURIComponent(petId) + "&surface=" + surface;
 	const c = clamp && Number.isFinite(clamp.x + clamp.y + clamp.w + clamp.h) ? clamp : {
 		x: 0,
 		y: 0,
@@ -971,7 +1233,7 @@ function mountChatDialog(opts) {
 		sendChat(withPet, text).then((state) => {
 			if (state.ok) {
 				close();
-				if (onReply) onReply(state.reply, state.image);
+				if (onSent) onSent();
 			} else {
 				err.textContent = "对话失败：" + (state.message ?? state.reason);
 				err.style.display = "block";
@@ -1089,6 +1351,35 @@ const softClampSpeed = (speed) => {
 	if (speed <= 0) return 0;
 	return MAX_THROW_SPEED * (1 - Math.exp(-speed / MAX_THROW_SPEED));
 };
+const THROW_SPEED_ANCHOR = 1200;
+const throwVelocity = (angleDeg, power) => {
+	const speed = softClampSpeed(power * THROW_SPEED_ANCHOR);
+	const rad = angleDeg * Math.PI / 180;
+	return {
+		vx: Math.cos(rad) * speed,
+		vy: -Math.sin(rad) * speed
+	};
+};
+const SLINGSHOT_REF_RATIO = .6;
+const slingshotRefDist = (size) => size > 0 ? size * SLINGSHOT_REF_RATIO : 0;
+const slingshotPower = (dist, size) => {
+	const ref = slingshotRefDist(size);
+	if (!(ref > 0) || !(dist > 0) || !Number.isFinite(dist)) return 0;
+	return dist / ref;
+};
+const pullAngle = (pullX, pullY) => Math.atan2(pullY, -pullX) * 180 / Math.PI;
+const slingshotVelocity = (angleDeg, power, throwPower = DEFAULT_THROW_POWER) => {
+	const speed = THROW_SPEED_ANCHOR * Math.max(0, power) * Math.max(0, throwPower);
+	if (speed === 0) return {
+		vx: 0,
+		vy: 0
+	};
+	const rad = angleDeg * Math.PI / 180;
+	return {
+		vx: Math.cos(rad) * speed,
+		vy: -Math.sin(rad) * speed
+	};
+};
 const estimateReleaseVelocity = (trail, now, physics = DEFAULT_PHYSICS) => {
 	if (trail.length === 0) return null;
 	const last = trail[trail.length - 1];
@@ -1178,7 +1469,7 @@ const throwStep = (s, dtRaw, b, physics = DEFAULT_PHYSICS) => {
 		atRest
 	};
 };
-const throwStepRegion = (s, dtRaw, space, physics = DEFAULT_PHYSICS) => {
+const throwStepRegion = (s, dtRaw, space, physics = DEFAULT_PHYSICS, lockScreen = -1) => {
 	const dt = Math.min(Math.max(dtRaw, 0), MAX_STEP_DT);
 	let { x, y, vx, vy } = s;
 	vy += physics.gravity * dt;
@@ -1195,37 +1486,40 @@ const throwStepRegion = (s, dtRaw, space, physics = DEFAULT_PHYSICS) => {
 	};
 	const h = space.size * 9 / 16;
 	let bounced = false;
+	const locked = Number.isInteger(lockScreen) && lockScreen >= 0 && lockScreen < space.areas.length;
+	/** 该用哪块屏的 AABB / 工作区 / 面板：锁定时恒为锁定屏，否则取身体中心所在屏 */
+	const pick$1 = (i) => locked ? lockScreen : i;
 	let cur = screenOfBox(space, x, y);
-	let b = space.bounds[cur];
-	let a = space.areas[cur];
-	const pa = space.panels[cur] || a;
+	let b = space.bounds[pick$1(cur)];
+	let a = space.areas[pick$1(cur)];
+	const pa = space.panels[pick$1(cur)] || a;
 	const cy = y + h / 2;
 	if (x < b.minX) {
-		if (indexAtPoint(space.panels, pa.x - 1, cy) < 0) {
+		if (locked || indexAtPoint(space.panels, pa.x - 1, cy) < 0) {
 			x = b.minX;
 			vx = Math.abs(vx) * physics.restitution;
 			bounced = true;
 		}
 	} else if (x > b.maxX) {
-		if (indexAtPoint(space.panels, rectRight(pa), cy) < 0) {
+		if (locked || indexAtPoint(space.panels, rectRight(pa), cy) < 0) {
 			x = b.maxX;
 			vx = -Math.abs(vx) * physics.restitution;
 			bounced = true;
 		}
 	}
 	cur = screenOfBox(space, x, y);
-	b = space.bounds[cur];
-	a = space.areas[cur];
-	const pa2 = space.panels[cur] || a;
+	b = space.bounds[pick$1(cur)];
+	a = space.areas[pick$1(cur)];
+	const pa2 = space.panels[pick$1(cur)] || a;
 	const cx = x + space.size / 2;
 	if (y < b.minY) {
-		if (physics.ceilingBounce && indexAtPoint(space.panels, cx, pa2.y - 1) < 0) {
+		if (physics.ceilingBounce && (locked || indexAtPoint(space.panels, cx, pa2.y - 1) < 0)) {
 			y = b.minY;
 			vy = Math.abs(vy) * physics.restitution;
 			bounced = true;
 		}
 	} else if (y >= b.maxY) {
-		if (indexAtPoint(space.panels, cx, rectBottom(pa2)) < 0) {
+		if (locked || indexAtPoint(space.panels, cx, rectBottom(pa2)) < 0) {
 			y = b.maxY;
 			vx *= Math.max(0, 1 - physics.groundFriction * dt);
 			if (Math.abs(vy) < REST_VY) vy = 0;
@@ -1233,7 +1527,7 @@ const throwStepRegion = (s, dtRaw, space, physics = DEFAULT_PHYSICS) => {
 			bounced = true;
 		}
 	}
-	cur = screenOfBox(space, x, y);
+	cur = pick$1(screenOfBox(space, x, y));
 	b = space.bounds[cur];
 	const speed = Math.hypot(vx, vy);
 	const atRest = y >= b.maxY - 1 && Math.abs(vy) < 1 && Math.abs(vx) < REST_VX || bounced && speed < REST_VY && Math.abs(vy) < 1;
@@ -1246,6 +1540,13 @@ const throwStepRegion = (s, dtRaw, space, physics = DEFAULT_PHYSICS) => {
 		bounced,
 		atRest
 	};
+};
+const SUBSTEP_PX = 8;
+const SUBSTEP_MAX = 64;
+const throwSubsteps = (vx, vy, dt) => {
+	const travel = Math.hypot(vx, vy) * Math.min(Math.max(dt, 0), MAX_STEP_DT);
+	if (!(travel > SUBSTEP_PX)) return 1;
+	return Math.min(SUBSTEP_MAX, Math.ceil(travel / SUBSTEP_PX));
 };
 const PET_BOUNCE_E = .995;
 const bodyPixelBox = (o) => {
@@ -1301,7 +1602,7 @@ const SCORE_POPUP_CSS = [
 	".dsh-pet-score{position:fixed;z-index:2147483002;min-width:120px;text-align:center;",
 	"background:rgba(255,255,255,.97);border:1px solid rgba(255,179,0,.35);border-radius:12px;",
 	"box-shadow:0 10px 32px rgba(0,0,0,.22);padding:8px 16px 9px;user-select:none;pointer-events:auto;",
-	"font-family:'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif;}",
+	"font-family:var(--dsh-pet-font-family,'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif);}",
 	".dsh-pet-score.is-in{animation:dshPetScorePop .28s ease}",
 	".dsh-pet-score-val{font-size:22px;line-height:1.25;font-weight:700;color:#ff8f00;font-variant-numeric:tabular-nums}",
 	".dsh-pet-score-sub{font-size:11px;line-height:1.4;color:rgba(43,43,43,.6);margin-top:2px;white-space:nowrap}",
@@ -1460,34 +1761,240 @@ const WORK_STATUS_INDEX = {
 	success: 4,
 	error: 5
 };
-const TIMEOUT_MS = 1e4;
-async function fetchWorkStatus(baseUrl = "/dsh-pet-7340/work-status") {
-	const res = await fetch(baseUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-	if (!res.ok) throw new Error("dsh-pet: work-status HTTP " + res.status);
-	const raw = await res.json().catch(() => null);
-	if (!raw || typeof raw !== "object") throw new Error("dsh-pet: work-status 响应非法");
-	const state = raw.state === null || WORK_STATUS_STATES.includes(raw.state) ? raw.state : null;
+function toWorkStatus(raw) {
+	if (!raw || typeof raw !== "object") return null;
+	const r = raw;
+	const state = r.state === null || typeof r.state === "string" && WORK_STATUS_STATES.includes(r.state) ? r.state : null;
 	return {
 		state,
-		task: typeof raw.task === "string" ? raw.task : null,
-		ts: Number(raw.ts) || 0
+		task: typeof r.task === "string" ? r.task : null
 	};
 }
+
+//#endregion
+//#region src/shared/state.ts
+/** 叶子规范化：形状不对（非对象 / counter 非数字）→ null（丢弃，不让脏数据进渲染层） */
+function normLeaf(value) {
+	if (!value || typeof value !== "object") return null;
+	const leaf$1 = value;
+	if (typeof leaf$1.counter !== "number" || !Number.isFinite(leaf$1.counter)) return null;
+	return {
+		counter: leaf$1.counter,
+		data: leaf$1.data ?? null
+	};
+}
+async function fetchState(baseUrl = "/dsh-pet-7340/state", wait) {
+	try {
+		const url = wait ? `${baseUrl}?since=${wait.since}&timeout=${wait.timeoutMs}` : baseUrl;
+		const res = await fetch(url, { cache: "no-store" });
+		if (!res.ok) return null;
+		const raw = await res.json().catch(() => null);
+		if (!raw || typeof raw !== "object") return null;
+		const sections = {};
+		const rawSections = raw.sections && typeof raw.sections === "object" ? raw.sections : {};
+		for (const [name, value] of Object.entries(rawSections)) {
+			const leaf$1 = normLeaf(value);
+			if (leaf$1) sections[name] = leaf$1;
+		}
+		const pets = {};
+		const rawPets = raw.pets && typeof raw.pets === "object" ? raw.pets : {};
+		for (const [petId, entry] of Object.entries(rawPets)) {
+			if (!entry || typeof entry !== "object") continue;
+			const leaves = {};
+			for (const [name, value] of Object.entries(entry)) {
+				const leaf$1 = normLeaf(value);
+				if (leaf$1) leaves[name] = leaf$1;
+			}
+			pets[petId] = leaves;
+		}
+		return {
+			counter: typeof raw.counter === "number" && Number.isFinite(raw.counter) ? raw.counter : void 0,
+			sections,
+			pets
+		};
+	} catch {
+		return null;
+	}
+}
+/** 遍历 S 的所有叶子（顺序：sections 在前、pets 在后） */
+function* walkLeaves(s) {
+	for (const [name, leaf$1] of Object.entries(s.sections ?? {})) yield ["sections." + name, leaf$1];
+	for (const [petId, leaves] of Object.entries(s.pets ?? {})) for (const [name, leaf$1] of Object.entries(leaves ?? {})) yield ["pets." + petId + "." + name, leaf$1];
+}
+function flattenCounters(s) {
+	const out = {};
+	for (const [path, leaf$1] of walkLeaves(s)) out[path] = leaf$1.counter;
+	return out;
+}
+function takeChanged(s, baseline) {
+	const out = [];
+	for (const [path, leaf$1] of walkLeaves(s)) {
+		if (baseline[path] === leaf$1.counter) continue;
+		baseline[path] = leaf$1.counter;
+		out.push({
+			path,
+			leaf: leaf$1
+		});
+	}
+	return out;
+}
+function readBalance(leaf$1) {
+	const state = toBalanceState(leaf$1.data);
+	if (!state) return null;
+	const manual = leaf$1.data.manual === true;
+	return {
+		state,
+		manual
+	};
+}
+function readSay(leaf$1) {
+	if (!leaf$1.data || typeof leaf$1.data !== "object") return null;
+	const d = leaf$1.data;
+	if (d.clear === true) return { kind: "clear" };
+	if (typeof d.text !== "string" || !d.text) return null;
+	return {
+		kind: "say",
+		text: d.text,
+		image: typeof d.image === "string" ? d.image : void 0,
+		url: typeof d.url === "string" ? d.url : void 0,
+		duration: typeof d.duration === "number" && Number.isFinite(d.duration) && d.duration >= 0 ? d.duration : void 0,
+		anim: typeof d.anim === "boolean" ? d.anim : void 0
+	};
+}
+function readWorkStatus(leaf$1) {
+	return toWorkStatus(leaf$1.data);
+}
+function readAnim(leaf$1) {
+	if (!leaf$1.data || typeof leaf$1.data !== "object") return null;
+	const d = leaf$1.data;
+	const name = typeof d.name === "string" && d.name ? d.name : void 0;
+	const url = typeof d.url === "string" && d.url ? d.url : void 0;
+	if (name === void 0 && url === void 0) return null;
+	return {
+		name,
+		url,
+		playbackId: typeof d.playbackId === "string" && d.playbackId ? d.playbackId : void 0,
+		facing: d.facing === "left" || d.facing === "right" ? d.facing : void 0
+	};
+}
+function readLock(leaf$1) {
+	if (!leaf$1.data || typeof leaf$1.data !== "object") return null;
+	const d = leaf$1.data;
+	if (d.locked === false) return { locked: false };
+	if (d.locked !== true) return null;
+	if (typeof d.expiresAt !== "number" || !Number.isFinite(d.expiresAt)) return null;
+	return {
+		locked: true,
+		expiresAt: d.expiresAt
+	};
+}
+function readPosition(leaf$1) {
+	if (!leaf$1.data || typeof leaf$1.data !== "object") return null;
+	const d = leaf$1.data;
+	if (typeof d.x !== "number" || !Number.isFinite(d.x)) return null;
+	if (typeof d.y !== "number" || !Number.isFinite(d.y)) return null;
+	if (d.mode !== "instant" && d.mode !== "spring" && d.mode !== "line") return null;
+	if (d.mode === "line") {
+		if (typeof d.duration !== "number" || !Number.isFinite(d.duration) || d.duration < 0) return null;
+		return {
+			x: d.x,
+			y: d.y,
+			mode: "line",
+			duration: d.duration
+		};
+	}
+	return {
+		x: d.x,
+		y: d.y,
+		mode: d.mode,
+		duration: 0
+	};
+}
+function readThrow(leaf$1) {
+	if (!leaf$1.data || typeof leaf$1.data !== "object") return null;
+	const d = leaf$1.data;
+	if (typeof d.angle !== "number" || !Number.isFinite(d.angle)) return null;
+	if (typeof d.power !== "number" || !Number.isFinite(d.power) || d.power <= 0) return null;
+	return {
+		angle: d.angle,
+		power: d.power
+	};
+}
+async function postAction(baseUrl, body) {
+	try {
+		const res = await fetch(baseUrl, {
+			method: "POST",
+			...body === void 0 ? {} : {
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body)
+			}
+		});
+		if (!res.ok) return false;
+		const data = await res.json().catch(() => null);
+		return data?.ok === true;
+	} catch {
+		return false;
+	}
+}
+
+//#endregion
+//#region src/shared/tooltip.ts
+const TOOLTIP_CLASS = "pet-tooltip";
+const TOOLTIP_GAP_RATIO = .022;
+function tooltipPlacement(cursor, tip, bounds, gap) {
+	const clamp = (v, lo, hi) => hi < lo ? lo : Math.min(Math.max(v, lo), hi);
+	const rightMax = bounds.x + bounds.w;
+	const bottomMax = bounds.y + bounds.h;
+	let x = cursor.x + gap;
+	if (x + tip.w > rightMax) x = cursor.x - gap - tip.w;
+	x = clamp(x, bounds.x, rightMax - tip.w);
+	let y = cursor.y + gap;
+	if (y + tip.h > bottomMax) y = cursor.y - gap - tip.h;
+	y = clamp(y, bounds.y, bottomMax - tip.h);
+	return {
+		x,
+		y
+	};
+}
+const TOOLTIP_CSS = [
+	".pet-tooltip{",
+	"position:fixed;left:0;top:0;",
+	"max-width:calc(var(--dsh-pet-size,var(--pet-size,462px))*0.8);",
+	"padding:calc(var(--dsh-pet-size,var(--pet-size,462px))*0.010) calc(var(--dsh-pet-size,var(--pet-size,462px))*0.021);",
+	"border-radius:calc(var(--dsh-pet-size,var(--pet-size,462px))*0.016);",
+	"background:rgba(255,255,255,.96);color:#1f1f1f;",
+	"border:1px solid rgba(0,0,0,.12);",
+	"font-family:var(--dsh-pet-font-family,\"ShangshouSoftCandy\",\"Yuanti SC\",\"YouYuan\",\"幼圆\",\"Comic Sans MS\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif);",
+	"font-size:var(--dsh-pet-font-tip,calc(var(--dsh-pet-size,var(--pet-size,462px))*0.026));line-height:1.4;",
+	"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
+	"box-shadow:0 calc(var(--dsh-pet-size,var(--pet-size,462px))*0.004) calc(var(--dsh-pet-size,var(--pet-size,462px))*0.013) rgba(0,0,0,.18);",
+	"opacity:0;transition:opacity .12s ease;pointer-events:none;z-index:2}",
+	".pet-tooltip.is-on{opacity:1}"
+].join("");
 
 //#endregion
 exports.ACCEL_GAIN_MAX = ACCEL_GAIN_MAX
 exports.ACCEL_REF = ACCEL_REF
 exports.ANIMATION_EXT = ANIMATION_EXT
+exports.BUBBLE_FONT_BASE_PX = BUBBLE_FONT_BASE_PX
+exports.BUBBLE_METRICS = BUBBLE_METRICS
+exports.BUBBLE_OVERLAP_RATIO = BUBBLE_OVERLAP_RATIO
 exports.CANVAS_H = CANVAS_H
 exports.CHAT_CSS = CHAT_CSS
 exports.DEAD_ZONE_SPEED = DEAD_ZONE_SPEED
-exports.DEEPSEEK_FULL_BALANCE_CNY = DEEPSEEK_FULL_BALANCE_CNY
+exports.DEFAULT_FONT = DEFAULT_FONT
 exports.DEFAULT_PHYSICS = DEFAULT_PHYSICS
+exports.DEFAULT_ROLLING_LABEL = DEFAULT_ROLLING_LABEL
 exports.DEFAULT_THROW_POWER = DEFAULT_THROW_POWER
 exports.DRAG_THRESHOLD = DRAG_THRESHOLD
 exports.FEET_Y = FEET_Y
+exports.FONT_PRESETS = FONT_PRESETS
+exports.FONT_REF_SIZE = FONT_REF_SIZE
+exports.FONT_SIZE_MAX = FONT_SIZE_MAX
+exports.FONT_SIZE_MIN = FONT_SIZE_MIN
 exports.GRAVITY = GRAVITY
 exports.GROUND_FRICTION = GROUND_FRICTION
+exports.HANDLERS = HANDLERS
 exports.HIT_BOX = HIT_BOX
 exports.MAX_BODY = MAX_BODY
 exports.MAX_STEP_DT = MAX_STEP_DT
@@ -1497,12 +2004,14 @@ exports.MEME_BUBBLE_CSS = MEME_BUBBLE_CSS
 exports.MEME_IMG_CLASS = MEME_IMG_CLASS
 exports.MENU_CSS = MENU_CSS
 exports.MIN_SPAN_MS = MIN_SPAN_MS
+exports.MORE_MENU_LABEL = MORE_MENU_LABEL
 exports.NOTIFY_ICONS = NOTIFY_ICONS
-exports.OPENCODE_QUOTA_USD = OPENCODE_QUOTA_USD
 exports.PEAK_WEIGHT = PEAK_WEIGHT
 exports.PET_BOUNCE_E = PET_BOUNCE_E
 exports.PET_DISPLAYS = PET_DISPLAYS
 exports.PET_REF_WIDTH = PET_REF_WIDTH
+exports.QUOTA_CRIT_PERCENT = QUOTA_CRIT_PERCENT
+exports.QUOTA_WARN_PERCENT = QUOTA_WARN_PERCENT
 exports.RELEASE_STALE_MS = RELEASE_STALE_MS
 exports.RELEASE_WINDOW_MS = RELEASE_WINDOW_MS
 exports.RESTITUTION = RESTITUTION
@@ -1512,6 +2021,8 @@ exports.SCORE_MIN_SPEED = SCORE_MIN_SPEED
 exports.SCORE_POPUP_CSS = SCORE_POPUP_CSS
 exports.SCORE_POPUP_DURATION_MS = SCORE_POPUP_DURATION_MS
 exports.SEG_MIN_DT_MS = SEG_MIN_DT_MS
+exports.SLINGSHOT_DOUBLE_MS = SLINGSHOT_DOUBLE_MS
+exports.SLINGSHOT_REF_RATIO = SLINGSHOT_REF_RATIO
 exports.SPRING_C = SPRING_C
 exports.SPRING_K = SPRING_K
 exports.SQ_DURATION_MS = SQ_DURATION_MS
@@ -1519,32 +2030,42 @@ exports.SQ_HARD_SPEED = SQ_HARD_SPEED
 exports.SQ_MAX_SQUASH = SQ_MAX_SQUASH
 exports.SQ_SOFT_SPEED = SQ_SOFT_SPEED
 exports.SQ_SQUASH = SQ_SQUASH
+exports.SUBSTEP_MAX = SUBSTEP_MAX
+exports.SUBSTEP_PX = SUBSTEP_PX
+exports.THROW_SPEED_ANCHOR = THROW_SPEED_ANCHOR
+exports.TIP_FONT_BASE_PX = TIP_FONT_BASE_PX
+exports.TOOLTIP_CLASS = TOOLTIP_CLASS
+exports.TOOLTIP_CSS = TOOLTIP_CSS
+exports.TOOLTIP_GAP_RATIO = TOOLTIP_GAP_RATIO
 exports.TRAIL_KEEP_MS = TRAIL_KEEP_MS
 exports.WINDOW_LABELS = WINDOW_LABELS
 exports.WORK_STATUS_INDEX = WORK_STATUS_INDEX
 exports.WORK_STATUS_STATES = WORK_STATUS_STATES
 exports.anchorPixel = anchorPixel
 exports.balanceBubbleView = balanceBubbleView
+exports.balanceDetailView = balanceDetailView
 exports.balanceEventIndex = balanceEventIndex
 exports.balancePercent = balancePercent
 exports.bodyPixelBox = bodyPixelBox
 exports.boundingRect = boundingRect
+exports.bubbleMaxHeightPx = bubbleMaxHeightPx
+exports.bubbleTopMarginPx = bubbleTopMarginPx
 exports.buildMenuTree = buildMenuTree
+exports.buildMoreBranch = buildMoreBranch
 exports.clampPointInRect = clampPointInRect
 exports.clampPointToRegion = clampPointToRegion
 exports.clickScore = clickScore
 exports.collidePet = collidePet
 exports.createMemeImage = createMemeImage
+exports.createMemeImageFromUrl = createMemeImageFromUrl
 exports.decideBalanceNotice = decideBalanceNotice
-exports.deepseekPricingTier = deepseekPricingTier
+exports.displayMenuBranch = displayMenuBranch
 exports.distToRectSq = distToRectSq
 exports.estimateReleaseVelocity = estimateReleaseVelocity
-exports.fetchBalanceState = fetchBalanceState
-exports.fetchTriggerCount = fetchTriggerCount
-exports.fetchWhisperState = fetchWhisperState
-exports.fetchWhisperTrigger = fetchWhisperTrigger
-exports.fetchWorkStatus = fetchWorkStatus
+exports.fetchState = fetchState
 exports.flattenConfigPets = flattenConfigPets
+exports.flattenCounters = flattenCounters
+exports.fontStackOf = fontStackOf
 exports.frameToToast = frameToToast
 exports.indexAtPoint = indexAtPoint
 exports.injectMemeBubbleCss = injectMemeBubbleCss
@@ -1566,7 +2087,18 @@ exports.pickWeightedCategory = pickWeightedCategory
 exports.planMove = planMove
 exports.pointInRect = pointInRect
 exports.poolIncludes = poolIncludes
+exports.postAction = postAction
+exports.pullAngle = pullAngle
+exports.quotaTone = quotaTone
 exports.randomBetween = randomBetween
+exports.readAnim = readAnim
+exports.readBalance = readBalance
+exports.readLock = readLock
+exports.readMenuItems = readMenuItems
+exports.readPosition = readPosition
+exports.readSay = readSay
+exports.readThrow = readThrow
+exports.readWorkStatus = readWorkStatus
 exports.rectAtPoint = rectAtPoint
 exports.rectBottom = rectBottom
 exports.rectRight = rectRight
@@ -1574,23 +2106,35 @@ exports.rectsOverlap = rectsOverlap
 exports.regionArea = regionArea
 exports.regionHoleRatio = regionHoleRatio
 exports.resetInText = resetInText
+exports.resolveFontPx = resolveFontPx
 exports.resolveRect = resolveRect
 exports.rollKind = rollKind
 exports.screenOfBox = screenOfBox
 exports.sendChat = sendChat
+exports.slingshotPower = slingshotPower
+exports.slingshotRefDist = slingshotRefDist
+exports.slingshotVelocity = slingshotVelocity
 exports.slotIncludes = slotIncludes
+exports.softClampSpeed = softClampSpeed
 exports.spawnScoreBurst = spawnScoreBurst
 exports.springStep = springStep
 exports.squashScale = squashScale
+exports.takeChanged = takeChanged
 exports.throwBounds = throwBounds
 exports.throwBoundsIn = throwBoundsIn
 exports.throwSpace = throwSpace
 exports.throwStep = throwStep
 exports.throwStepRegion = throwStepRegion
+exports.throwSubsteps = throwSubsteps
+exports.throwVelocity = throwVelocity
+exports.toBalanceState = toBalanceState
+exports.toWorkStatus = toWorkStatus
+exports.tooltipPlacement = tooltipPlacement
 exports.translateRects = translateRects
 exports.trimTrail = trimTrail
 exports.truncate = truncate
 exports.urgentWindow = urgentWindow
 exports.whisperBubbleView = whisperBubbleView
+exports.windowsHandler = windowsHandler
 return exports;
 })({});

@@ -5,6 +5,8 @@
 //     差半只宠物宽，会让跨窗碰撞检测整体错位）。
 //     size/bottomPad = 碰撞站场登记用（静止宠物只发 set-bounds，靠它带上尺寸才能被其它
 //     飞行宠物撞到）；vx/vy = 当前速度（飞行中实时值，静止/拖拽 = 0）。
+//     marginL/marginT = 窗口左右/上余量（DIP）——主进程算宠物身体命中区要用。**不能再省**：
+//     上边距按气泡最大高度加高后余量不再四边相等，主进程按「窗口宽/4」反推会让命中区整体偏上。
 //   - setInteractive：点击穿透翻转——窗口默认整窗穿透（透明像素不挡下层应用），
 //     renderer 在光标进/出宠物身体命中区时上报，主进程 setIgnoreMouseEvents 翻转。
 //   - setInputBusy：**我正在用这个窗口的鼠标输入**（拖拽中 / 菜单开着 / 对话弹窗开着），
@@ -20,17 +22,33 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('petBridge', {
-  setBounds(x, y, width, height, boxX, boxY, size, bottomPad, vx, vy) {
-    ipcRenderer.send('pet:set-bounds', { x, y, width, height, boxX, boxY, size, bottomPad, vx, vy });
+  setBounds(x, y, width, height, boxX, boxY, size, bottomPad, vx, vy, marginL, marginT) {
+    ipcRenderer.send('pet:set-bounds', {
+      x,
+      y,
+      width,
+      height,
+      boxX,
+      boxY,
+      size,
+      bottomPad,
+      vx,
+      vy,
+      marginL,
+      marginT,
+    });
   },
   setInteractive(interactive) {
     ipcRenderer.send('pet:set-interactive', !!interactive);
   },
-  // 我正在用这个窗口的鼠标输入（拖拽中/菜单开/弹窗开）：主进程兜底通道在 busy 期间绝不翻回穿透
+  // 忙碌态配合 setInputRegions：拖拽持续捕获，菜单/聊天框外仍可点击其它应用。
   setInputBusy(busy) {
     ipcRenderer.send('pet:input-busy', !!busy);
   },
-  // 右键菜单「打开网站」：主进程用系统默认浏览器打开 DSH 网站（等效网页 Ctrl+点击链接）
+  setInputRegions(input) {
+    ipcRenderer.send('pet:input-regions', input);
+  },
+  // 右键菜单「打开网站」：主进程按宿主形态打开——桌面应用宿主唤起桌面窗口（dsh://open），否则系统默认浏览器打开 DSH 网站（等效网页 Ctrl+点击链接）
   openDshSite(url) {
     ipcRenderer.send('pet:open-site', { url });
   },
@@ -52,7 +70,7 @@ contextBridge.exposeInMainWorld('petBridge', {
   onDisplays(cb) {
     ipcRenderer.on('pet:displays', (e, geo) => cb(geo));
   },
-  // ---- 互动碎碎念：截主屏（主进程落临时 jpg，返回 {ok, path}）----
+  // 互动碎碎念：截主屏（主进程落临时 jpg，返回 {ok, path}）
   captureScreen() {
     return ipcRenderer.invoke('pet:capture-screen');
   },

@@ -1,8 +1,8 @@
 /**
  * host 侧工作状态联动核心（自包含，不 import src/shared —— DSH 单文件加载约束）。
  *
- * 职责：监听 DSH `session/event`，把 6 类会话事件压缩成"当前活动工作状态"，供
- * `/dsh-pet-7340/work-status` 端点给浏览器轮询（与 balance/whisper 轮询同族）。
+ * 职责：监听 DSH `session/event`，把 6 类会话事件压缩成"当前活动工作状态"，由 index.ts
+ * 写进 S 的 sections.workStatus，浏览器/桌面统一轮询 /state 后按 counter 变化渲染。
  * 只做聚合与去重：状态无变化不产生新输出（签名比对防刷屏）；不调用任何模型。
  *
  * 本文件同时承载**按会话聚合 + 展示快照**（WorkStatusStore）：state 与任务详情文案 task 都挂在
@@ -12,8 +12,9 @@
  *   0 thinking / 1 working / 2 result / 3 waiting / 4 success / 5 error
  */
 
-/** 工作状态档位（数组索引 = events.workStatus 档位） */
-export type HostWorkStatusState = 'thinking' | 'working' | 'result' | 'waiting' | 'success' | 'error';
+/** 工作状态档位（数组索引 = events.workStatus 档位；顺序与 shared/work-status.ts 一致） */
+export const HOST_WORK_STATUS_STATES = ['thinking', 'working', 'result', 'waiting', 'success', 'error'] as const;
+export type HostWorkStatusState = (typeof HOST_WORK_STATUS_STATES)[number];
 
 /**
  * turn/end reason.kind → 状态：
@@ -206,6 +207,11 @@ export class WorkStatusStore {
   /** 该会话当前档位（无条目 / 已清 → undefined） */
   stateOf(sessionId: string): HostWorkStatusState | undefined {
     return this.sessions.get(sessionId)?.state;
+  }
+
+  /** 该会话当前任务详情（无条目 → null） */
+  taskOf(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.task ?? null;
   }
 
   /** 写会话状态（保留该会话已有的 task）；同状态且 seq 不更新 → 无变化返回 false（防刷屏） */

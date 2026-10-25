@@ -70,10 +70,17 @@ export interface Animations {
 }
 
 /** 一只宠物（与 jsonc pets[i] 同形，position 嵌套）。
- *  可选段（animations / animationWeights / extra / assetRoot / eventsRefreshSec / physics）为渲染期派生或
- *  「文件定义宠物」专用：
- *  - animations / animationWeights / eventsRefreshSec / physics：所属条目的条目级字段，由配置合并
- *    （host readAllConfig / 客户端 flattenConfigPets）在拍平时吹进每只实例——多实例共享；
+ *  可选段（animations / animationWeights / extra / assetRoot / eventsRefreshSec / physics / font / confineToScreen /
+ *  workStatusTexts / whisperModel / chatModel）为渲染期派生或「文件定义宠物」专用：
+ *  - animations / animationWeights / eventsRefreshSec / physics / font / confineToScreen / whisperModel / chatModel：所属条目的条目级字段，由配置合并
+ *    （host readAllConfig / 客户端 flattenConfigPets）在拍平时吹进每只实例——多实例共享。
+ *    其中 physics / font / confineToScreen / whisperImageEnabled / chatImageEnabled / chatImageLimit /
+ *    chatMemoryRounds / whisperModel / chatModel / eventsRefreshSec 是**全局默认**：文件宠物条目的合并基座取**用户层**
+ *    （main-config.jsonc），即"设置页改一次，所有宠物（含 pet pack）都生效"；种类文件仍可在自己
+ *    顶层覆盖（见 host/config.ts 的 GLOBAL_DEFAULT_KEYS）。其余条目级字段（animations /
+ *    whisperPrompt / memes / workStatusTexts …）的基座是**内置默认**，与用户层无关；
+ *    **例外：whisperPrompt 有实例级覆盖**（`pets[].whisperPrompt`，见字段注释）——它是唯一
+ *    允许写在实例上的条目级字段，写了就取代条目的那份；
  *  - extra: true 标记该宠物由 pet/ 目录文件定义：设置页不可编辑、保存时排除，
  *    由拍平逻辑统一打标，**永不出现在持久化配置里**；
  *  - assetRoot: 素材目录名（= 配置文件前缀 `<名>`，即 `pet/<名>-animation/`）；素材 URL
@@ -89,30 +96,63 @@ export interface Pet {
   /** 是否启用余额功能：true=触发余额动画+显示余额气泡；false=该宠物完全禁用余额。缺失即配置错误 */
   balanceEnabled: boolean;
   /** 是否启用碎碎念：true=按 eventsRefreshSec.whisper 周期生成一句话并播碎碎念动画；false=禁用。
-   *  缺失默认 false（默认关闭：碎碎念每次生成会调用当前对话的模型，本地 LLM 单并发时
-   *  会顶掉正在跑的任务的 KV cache，见 config.jsonc 注释） */
+   *  缺失默认 true（内置默认开启：碎碎念每次生成会调用当前对话的模型，本地 LLM 单并发时
+   *  会顶掉正在跑的任务的 KV cache，见 config.jsonc 注释——不需要的宠物请显式写 false） */
   whisperEnabled: boolean;
   /** 是否启用工作状态联动：true=监听 DSH 会话事件（tool/call 等），按 animations.events.workStatus
-   *  数组切档位动画 + 气泡；false=禁用（默认）。监听不调用模型，无 KV cache 风险 */
+   *  数组切档位动画 + 气泡；false=禁用。缺失默认 true（内置默认开启）。监听不调用模型，无 KV cache 风险 */
   workStatusEnabled: boolean;
+  /** 宠物固定：true = 随机动画链不再抽「转向(turn) / 移动(move)」两档——宠物不自己翻朝向、
+   *  也不自己走开，只播原地待机与随机小动作（这两档权重按 0 算，份额自然并入随机小动作）。
+   *  **只影响随机链**：右键菜单点播（含「转向 / 移动」两项）、/anim 接口与命令、事件动画
+   *  （余额/碎碎念/工作状态）、点击回应与拖拽一律照常——用户主动触发的不受此限制。
+   *  缺失默认 false（保持原行为：会自己走、会自己翻） */
+  fixedEnabled: boolean;
   /** 显示位置（web/desktop/both/none，必填）：缺失即配置错误，代码不做兜底 */
   display: PetDisplay;
   position: { corner: Corner; marginX: number; marginY: number };
+  /** **实例级人设**（可选，`pets[].whisperPrompt`）：碎碎念与对话共用的系统提示词正文。
+   *  写了就**取代**所属条目顶层那一份（替换，不是拼接）；没写/空串 = 回落条目。回落发生在
+   *  host 消费端（src/host/persona.ts 的 petPersona），合并器不填生效值——所以这里 undefined
+   *  就是"跟随条目"，不是错误。
+   *  **无长度上限**（与条目级 whisperPrompt 同一口径：只要求非空字符串）。
+   *  只写正文：名字（`你的名字是“X”`）与时间背景由 host 无条件追加，不要在这里重复写。 */
+  whisperPrompt?: string;
   animations?: Animations;
   animationWeights?: Weights;
   extra?: boolean;
   assetRoot?: string;
-  /** 渲染派生：所属条目的刷新周期（秒，事件名 → 间隔；合并时已填默认值） */
+  /** 全局默认：事件刷新周期（秒，事件名 → 间隔；整段替换，缺的键由消费端各自兜底）。
+   *  `.whisper` 按所属条目读（种类可覆盖）；`.balance` 的消费端只读 main 条目。 */
   eventsRefreshSec?: Record<string, number>;
-  /** 条目级：拖拽抛掷物理参数（全局共用；host 合并已填默认，拍平时吹入） */
+  /** 全局默认：拖拽抛掷物理参数（用户在 main-config.jsonc 里写一次即对所有宠物生效，
+   *  含 pet pack；种类文件顶层写了则用自己那份。host 合并已填默认，拍平时吹入） */
   physics?: PhysicsParams;
+  /** 全局默认：是否锁定在当前屏幕（归属规则同 physics）——抛掷与自主漫游都只在当前所在那块屏内活动 */
+  confineToScreen?: boolean;
   /** 条目级：工作状态气泡文案（二维数组，外层索引 = workStatus 档位 0..5，内层每档可多句随机抽；
    *  host 合并已填默认，拍平时吹入；整字段缺失 = 不弹工作状态文本，只播动画） */
   workStatusTexts?: string[][];
-  /** 条目级：互动碎碎念识屏间隔（秒；host 合并已填默认 30，拍平时吹入） */
+  /** 全局默认：碎碎念单独指定的服务商 + 模型（host 合并已填默认，拍平时吹入；
+   *  provider 与 model 都为空 = 跟随当前对话的模型） */
+  whisperModel?: ModelSelection;
+  /** 全局默认：对话单独指定的服务商 + 模型（同上，都为空 = 跟随当前对话的模型） */
+  chatModel?: ModelSelection;
+  /** 全局默认：字体（种类 / 字号 / 是否随宠物大小缩放；host 合并已填默认，拍平时吹入） */
+  font?: FontConfig;
+  /** 全局默认：互动碎碎念识屏间隔（秒；host 合并已填默认 30，拍平时吹入） */
   interactiveIntervalSec?: number;
-  /** 条目级：互动碎碎念单条回复字数上限（host 合并已填默认 60） */
+  /** 全局默认：互动碎碎念单条回复字数上限（host 合并已填默认 60） */
   interactiveMaxChars?: number;
+}
+
+/** 一处「服务商 + 模型」选择（config.jsonc 的 whisperModel / chatModel 段）。
+ *  provider 与 model **要么都为空（= 跟随当前对话的模型）要么都非空**——只填一半是配置错误。 */
+export interface ModelSelection {
+  /** 服务商路由 id（与 DSH 模型选择器同一命名空间） */
+  provider: string;
+  /** 该服务商下的模型 id */
+  model: string;
 }
 
 /** config.jsonc 的 physics 段：拖拽抛掷手感参数（全局，所有宠物共用）。
@@ -132,6 +172,24 @@ export interface PhysicsParams {
   petCollision: boolean;
 }
 
+/** 字体种类预设 id（config.jsonc 的 font.family 白名单；清单与对应字体栈见 src/shared/fonts.ts） */
+export type FontFamilyId = 'candy' | 'yahei' | 'youyuan' | 'kaiti' | 'simsun' | 'comic' | 'system';
+
+/** config.jsonc 的 font 段：字体（全局一份，所有宠物共用）。
+ *  默认值 = src/shared/fonts.ts 的 DEFAULT_FONT（candy / 21 / true），内置配置与代码两侧保持一致。
+ *  **整段替换**（与 physics 同）：写了就整段用自己的，缺的子键不会从内置默认补回来——
+ *  所以手改配置时必须三个子键写全，否则整段非法 → 告警 + 取默认。 */
+export interface FontConfig {
+  /** 字体种类（预设 id）：影响气泡 / 悬浮提示 / 对话窗 / 得分弹窗——即现在用软糖体的全部地方 */
+  family: FontFamilyId;
+  /** 字号 px：**只**影响气泡与悬浮提示（对话窗与得分弹窗的字号不变）；基准 = 气泡正文字号，
+   *  提示与气泡内小字按既有比例派生 */
+  size: number;
+  /** 字号是否随宠物大小等比缩放：true = 按「实际 size / 基准尺寸」缩放（默认，与接入本配置前一致）；
+   *  false = 恒为 size px，宠物放大时字不变 */
+  followPet: boolean;
+}
+
 /** config.jsonc 全集——运行时直接使用（ANIM 即本类型） */
 export interface ClientConfig {
   /** 系统通知总开关：true=对话完成/生成失败/输出截断/权限申请/用户选择时弹出系统通知；缺失即配置错误 */
@@ -140,11 +198,20 @@ export interface ClientConfig {
   whisperImageEnabled: boolean;
   /** 对话配图开关：true=对话时把表情包清单交模型按语境选 1 张（可不选）；false=纯文本 */
   chatImageEnabled: boolean;
+  /** 是否锁定在当前屏幕：true=宠物只在当前所在那块屏内活动——甩出去只在松手时所在那块屏内弹
+   *  （屏缝当墙），自主漫游也只在当前所在那块屏内走（越出屏缝的那一步直接取消）；
+   *  false=跨屏飞行 / 跨屏行走（现状）。根字段（不属于 physics：它不改手感，只改「被允许去哪」），
+   *  条目级，缺失即配置错误 */
+  confineToScreen: boolean;
   pets: Pet[];
   animations: Animations;
   animationWeights: Weights;
   /** 拖拽抛掷物理参数（全局，所有宠物共用；host 合并已填默认） */
   physics: PhysicsParams;
+  /** 碎碎念用的服务商 + 模型（条目级，host 合并已填默认；两者都为空 = 跟随当前对话的模型） */
+  whisperModel: ModelSelection;
+  /** 对话用的服务商 + 模型（条目级，host 合并已填默认；两者都为空 = 跟随当前对话的模型） */
+  chatModel: ModelSelection;
   /** 事件刷新周期（秒）：事件名 → 间隔；balance = 余额数据刷新 + 动画触发间隔 */
   eventsRefreshSec: Record<string, number>;
 }

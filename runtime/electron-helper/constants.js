@@ -13,6 +13,7 @@ const CONFIG = {
   configUrl: params.get('configUrl') || 'http://127.0.0.1:3080/dsh-pet-7340/config',
   scale: Number(params.get('scale') || '1'),
   petIndex: Number(params.get('petIndex') || '0'),
+  topInsetRatio: Number(params.get('topInsetRatio') || '0'),
 };
 
 // ---------- 渲染端坐标系统一约定（DESIGN.md §3.5） ----------
@@ -30,6 +31,9 @@ function toLocal(v) {
 // bridge 模式（DSH_PET_BRIDGE=1）：请求走自定义 scheme，经 Electron 主进程转宿主管道——
 // 绕开 DSH Desktop 2.0.3+ 的浏览器访问闸门（只放行带令牌的请求，插件自拉进程的裸 HTTP 全 403）
 const BRIDGE = params.get('bridge') === '1';
+// 工具项「打开网站」的去向（主进程按宿主形态经 query 注入，见 main.js 的 OPEN_TARGET）：
+// desktop = 宿主是 DSH 桌面应用，菜单项改叫「打开软件」并唤起桌面应用主窗口；site = 打开站点。
+const OPEN_TARGET = params.get('openTarget') === 'desktop' ? 'desktop' : 'site';
 // 视口 = 全部显示器工作区的外接矩形（多显示器时即整个桌面；窗口只是宠物的一块局部画布）。
 // 它只是**坐标系原点与比例换算基准**：位置比例（customPos）、漫游 ratio 都按它算。
 // x/y = 外接矩形左上角（多显示器时原点非 0）——visibleClampRect 计算「窗口 ∩ 工作区」需要它；
@@ -53,6 +57,8 @@ const VIEW = {
 };
 /** 逐显示器工作区，**视口相对坐标**（= 屏幕坐标 − VIEW 原点）。抛掷/漫游/菜单夹取都走它们的并集 */
 let AREAS = [];
+/** 菜单/聊天框/提示仍限制在工作区，不能随宠物进入菜单栏或 Dock。 */
+let WORK_AREAS = [];
 /** 逐显示器**完整面板**（含任务栏区，视口相对坐标，与 AREAS 同序）：抛掷「越界侧有没有邻屏」
  *  的探测用它——任务栏在接缝处挖出的工作区条带不当墙（见 shared/physics.ts） */
 let PANELS = [];
@@ -74,6 +80,13 @@ function applyDeskGeometry(geo) {
     -VIEW.x,
     -VIEW.y,
   );
+  const workAreas = geo && Array.isArray(geo.workAreas) && geo.workAreas.length === list.length ? geo.workAreas : list;
+  WORK_AREAS = S.translateRects(
+    workAreas.map((a) => ({ x: toLocal(a.x), y: toLocal(a.y), width: toLocal(a.width), height: toLocal(a.height) })),
+    -VIEW.x,
+    -VIEW.y,
+  );
+  CONFIG.topInsetRatio = Number(geo.topInsetRatio) || 0;
   // 面板与工作区同序；缺失/长度不符（老主进程）退化为工作区，保持旧行为
   const panelsList =
     geo && Array.isArray(geo.panels) && geo.panels.length === list.length
@@ -117,15 +130,34 @@ applyDeskGeometry({
     return null;
   })(),
   primaryIndex: Number(params.get('primaryIndex') || 0),
+  workAreas: (() => {
+    try {
+      return JSON.parse(params.get('workAreas') || 'null');
+    } catch {
+      return null;
+    }
+  })(),
+  topInsetRatio: CONFIG.topInsetRatio,
 });
 const ORIGIN = new URL(CONFIG.configUrl).origin;
 /** 宿主 /dsh-pet-7340 前缀：bridge 走自定义 scheme（主进程转发），否则 HTTP 直连宿主 */
 const BASE = BRIDGE ? 'dsh-pet-bridge://dsh-pet/dsh-pet-7340' : ORIGIN + '/dsh-pet-7340';
-const BALANCE_URL = BASE + '/balance';
-const TRIGGER_URL = BASE + '/balance/trigger';
+const STATE_URL = BASE + '/state'; // 轮询统一状态 S：前端 1s 轮询的唯一数据源（余额/工作状态/通知/说话）
+const BALANCE_URL = BASE + '/balance'; // 余额刷新动作（POST，写 S；数据本身从 /state 读）
 const WHISPER_URL = BASE + '/whisper';
-const WORK_STATUS_URL = BASE + '/work-status'; // 工作状态联动：1s 轮询，ts 变化才触发（与浏览器同一端点）
+// 实况上报（渲染端 → 宿主，**内部通道**）：第三方用 GET /pose 读宿主存下的这份快照
+const POSE_REPORT_URL = BASE + '/pose/report';
+// 实况上报的节流间隔（ms）。sendBounds 在走位/抛掷时是**逐帧**调用的（60Hz），必须合并。
+// **必须带 trailing edge**（到点读当前值推一次）：只做 leading 会把"走位结束时的最后一次位置"
+// 丢掉，第三方读到的永远是中途值，而且没有任何报错。
+const POSE_THROTTLE_MS = 400;
 const BUBBLE_DURATION_MS = 10 * 1000; // 余额/碎碎念气泡展示时长（与浏览器一致：定时自动消失，与动画解耦）
+// 余额气泡展开/收起换内容前的等待（ms）：与 .pet-bubble 的 opacity 过渡同为 .25s，
+// 淡出走完再换内容，否则内容会在半透明时被替换 = 看得见的硬切（与浏览器 bubble.ts 同值）
+const BALANCE_FADE_MS = 250;
+// /state 长轮询的挂起时长（与浏览器端同值）：宿主在"版本没变"时最多挂这么久。
+// 1s 是前端自己定的下限——空闲时请求率与改造前一致（1 req/s），叶子一变宿主立刻返回。
+const STATE_WAIT_MS = 1000;
 // 窗口四周外扩 = 该比例 × 宠物尺寸：为气泡 / 未来可能的弹窗预留显示空间；
 // 外扩区透明且点击穿透（只有身体命中区可交互）。单点可调——按实际观感改这里。
 const WINDOW_MARGIN_RATIO = 0.5;
@@ -133,12 +165,12 @@ const WINDOW_MARGIN_RATIO = 0.5;
 // ---------- 全局状态 ----------
 const rootEl = document.getElementById('root');
 const errorEl = document.getElementById('pet-error');
-let config = null; // { pets: 拍平后的成品实例列表, refreshSec: 主条目周期 }（loadConfig 填充）
+let config = null; // { pets: 拍平后的成品实例列表, physics, confineToScreen }（loadConfig 填充）
 let sprites = []; // PetSprite[]（本窗口只装一只宠物）
 let balance = null; // BalanceState（本窗口单宠共用）
 let balanceTick = 0;
 let balanceNoticeKey = null; // 上次已提示的不可用原因（reason:provider）：自动轮询只在原因变化时再弹（判定在 shared，与浏览器同一份）
-let workTick = 0; // 工作状态联动 tick：容器 1s 轮询 /work-status，ts 变化才递增（各启用宠物以此触发）
+let workTick = 0; // 工作状态联动 tick：容器 1s 轮询 /state 的 sections.workStatus，counter 变化才递增（各启用宠物以此触发）
 let bootTimer = null;
 let loopsStarted = false;
 

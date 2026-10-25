@@ -200,9 +200,75 @@ export const springStep = (
   power: number = DEFAULT_THROW_POWER,
 ): number => v + ((target - x) * SPRING_K - v * SPRING_C) * power * dt;
 
-const softClampSpeed = (speed: number): number => {
+/** 软钳速：`cap*(1-e^(-s/cap))`，任意速度下单调可区分、渐近不超过 cap。
+ *  导出供抛掷指令（`POST /throw` 的 power）复用——接口抛掷与拖拽甩抛走同一条限速，手感一致。 */
+export const softClampSpeed = (speed: number): number => {
   if (speed <= 0) return 0;
   return MAX_THROW_SPEED * (1 - Math.exp(-speed / MAX_THROW_SPEED));
+};
+
+/** 抛掷指令的力度锚点：`power = 1.0` 对应软钳速**前**的 1200 px/s
+ *  （实际初速会被软上限压到约 1021 px/s，见 softClampSpeed）。 */
+export const THROW_SPEED_ANCHOR = 1200;
+
+/**
+ * 抛掷指令（`POST /dsh-pet-7340/throw` 的 `angle` + `power`）→ 初速度 (vx, vy)，px/s。
+ *
+ * `angle` 单位度，`0` = 正右，**逆时针为正**——屏幕坐标 y 向下，所以 `vy` 取负号
+ * （"往上抛"写 90，而不是 270）。任意实数角度都成立（sin/cos 天然按 360 周期）。
+ * 初速 = `power × THROW_SPEED_ANCHOR`，再过**既有软上限**：与拖拽甩抛同一条限速，
+ * 所以任意 `power` 都单调可区分且恒不超过 `MAX_THROW_SPEED`。
+ *
+ * 两端（浏览器 overlay / 桌面 sprite）共用本函数，保证接口抛掷的初速换算严格一致。
+ */
+export const throwVelocity = (angleDeg: number, power: number): { vx: number; vy: number } => {
+  const speed = softClampSpeed(power * THROW_SPEED_ANCHOR);
+  const rad = (angleDeg * Math.PI) / 180;
+  return { vx: Math.cos(rad) * speed, vy: -Math.sin(rad) * speed };
+};
+
+// ---- 弹弓（双击第二下按住拖）：力度 = 拉距，与手速无关 ----
+/**
+ * 弹弓的力度来源与拖拽甩抛是**两条独立的路**，物理侧完全共用：
+ * 这里只把「拉距」换成初速度，之后照样交给 startThrow → throwStep / throwStepRegion
+ *（重力 / 边缘反弹 / 地面摩擦 / 落地 Q 弹 / 宠物互撞 / 多屏空洞都不变）。
+ *
+ * 两条约定：
+ *   - 方向 = 拉的**反方向**（往左下拉 → 往右上弹），见 pullAngle；
+ *   - 力度**不设上限**：既不过 softClampSpeed，也不夹 power。软钳速是为手速抖动设的，
+ *     拉得远和拉得更远必须能区分开——那正是「按距离给力度」的意义。
+ * 刻度与 throwVelocity 同源：power = 1 对应 THROW_SPEED_ANCHOR，并乘同一个
+ * physics.throwPower（设置页「总力度」，与拖拽甩抛共用一份配置）。
+ */
+export const SLINGSHOT_REF_RATIO = 0.6;
+
+/** 「一倍力度」的拉距（px）：随宠物尺寸缩放——小宠物不必拖同样远才炸 */
+export const slingshotRefDist = (size: number): number => (size > 0 ? size * SLINGSHOT_REF_RATIO : 0);
+
+/** 拉距 → 力度倍率（px / 参考拉距）：线性、单调、**不夹取**；0 拉距 = 0 力度 */
+export const slingshotPower = (dist: number, size: number): number => {
+  const ref = slingshotRefDist(size);
+  if (!(ref > 0) || !(dist > 0) || !Number.isFinite(dist)) return 0;
+  return dist / ref;
+};
+
+/**
+ * 拉向量（起点 → 松手点，屏幕坐标，y 向下）→ 弹射角度（度，0 = 正右、逆时针为正）。
+ * 弹的是拉的**反方向**：往左拉 → 正右飞出；往上拉 → 向下落。角度约定与 throwVelocity 同一套。
+ */
+export const pullAngle = (pullX: number, pullY: number): number => (Math.atan2(pullY, -pullX) * 180) / Math.PI;
+
+/** 弹弓初速：角度约定、力度锚点与 throwVelocity 相同，但**没有软上限**（任意 power 都单调可区分） */
+export const slingshotVelocity = (
+  angleDeg: number,
+  power: number,
+  throwPower: number = DEFAULT_THROW_POWER,
+): { vx: number; vy: number } => {
+  const speed = THROW_SPEED_ANCHOR * Math.max(0, power) * Math.max(0, throwPower);
+  // 0 力度直接给 0（而不是算出来 cos/sin 的 -0）：叶子里的速度要能当普通数字比较
+  if (speed === 0) return { vx: 0, vy: 0 };
+  const rad = (angleDeg * Math.PI) / 180;
+  return { vx: Math.cos(rad) * speed, vy: -Math.sin(rad) * speed };
 };
 
 /**
@@ -334,12 +400,18 @@ export const throwStep = (
  *
  * 与「把屏缝当墙」相反：屏缝两侧都有屏，恒放行——DPI 一致时的跨屏弹跳手感一点不减。
  * 单块屏时探测点恒无邻屏、恒反弹，与 throwStep 逐位一致（有单测钉住）。
+ *
+ * lockScreen ≥ 0 = **锁定在该屏**（配置根字段 confineToScreen 开启时由桌面端传入）：边界恒取
+ * space.bounds[lockScreen]，两条轴的邻屏探测一律跳过——屏缝与空洞一样当墙，甩出去只在本屏内弹、
+ * 不会飞到隔壁显示器。浏览器 overlay 只有一块屏（视口），该开关在那里天然无效果。
+ * 索引越界（飞行途中拔掉显示器导致屏数变少）即退回不锁定，免得拿一块不存在的屏当边界。
  */
 export const throwStepRegion = (
   s: ThrowState,
   dtRaw: number,
   space: ThrowSpace,
   physics: PhysicsParams = DEFAULT_PHYSICS,
+  lockScreen = -1,
 ): ThrowState & { screen: number; bounced: boolean; atRest: boolean } => {
   const dt = Math.min(Math.max(dtRaw, 0), MAX_STEP_DT);
   let { x, y, vx, vy } = s;
@@ -350,21 +422,25 @@ export const throwStepRegion = (
 
   const h = (space.size * 9) / 16;
   let bounced = false;
+  // 锁定屏（confineToScreen）：索引越界（飞行途中拔掉显示器导致屏数变少）即视为不锁定
+  const locked = Number.isInteger(lockScreen) && lockScreen >= 0 && lockScreen < space.areas.length;
+  /** 该用哪块屏的 AABB / 工作区 / 面板：锁定时恒为锁定屏，否则取身体中心所在屏 */
+  const pick = (i: number): number => (locked ? lockScreen : i);
 
   // ---- 横向：边界来自身体中心所在屏，放行与否看缝外同高度处有没有像素 ----
   let cur = screenOfBox(space, x, y);
-  let b = space.bounds[cur];
-  let a = space.areas[cur];
-  const pa = space.panels[cur] || a;
+  let b = space.bounds[pick(cur)];
+  let a = space.areas[pick(cur)];
+  const pa = space.panels[pick(cur)] || a;
   const cy = y + h / 2;
   if (x < b.minX) {
-    if (indexAtPoint(space.panels, pa.x - 1, cy) < 0) {
+    if (locked || indexAtPoint(space.panels, pa.x - 1, cy) < 0) {
       x = b.minX;
       vx = Math.abs(vx) * physics.restitution;
       bounced = true;
     }
   } else if (x > b.maxX) {
-    if (indexAtPoint(space.panels, rectRight(pa), cy) < 0) {
+    if (locked || indexAtPoint(space.panels, rectRight(pa), cy) < 0) {
       x = b.maxX;
       vx = -Math.abs(vx) * physics.restitution;
       bounced = true;
@@ -373,20 +449,20 @@ export const throwStepRegion = (
 
   // ---- 纵向（横向若被夹回，身体中心可能已换屏，重新定位）----
   cur = screenOfBox(space, x, y);
-  b = space.bounds[cur];
-  a = space.areas[cur];
-  const pa2 = space.panels[cur] || a;
+  b = space.bounds[pick(cur)];
+  a = space.areas[pick(cur)];
+  const pa2 = space.panels[pick(cur)] || a;
   const cx = x + space.size / 2;
   if (y < b.minY) {
     // ceilingBounce=false：顶部无边界，不夹不弹——宠物飞出屏幕顶部，靠重力落回
-    if (physics.ceilingBounce && indexAtPoint(space.panels, cx, pa2.y - 1) < 0) {
+    if (physics.ceilingBounce && (locked || indexAtPoint(space.panels, cx, pa2.y - 1) < 0)) {
       y = b.minY;
       vy = Math.abs(vy) * physics.restitution;
       bounced = true;
     }
   } else if (y >= b.maxY) {
     // 下方还有一块屏（上下排布的桌面）⇒ 不当地面，继续往下掉
-    if (indexAtPoint(space.panels, cx, rectBottom(pa2)) < 0) {
+    if (locked || indexAtPoint(space.panels, cx, rectBottom(pa2)) < 0) {
       y = b.maxY;
       vx *= Math.max(0, 1 - physics.groundFriction * dt);
       if (Math.abs(vy) < REST_VY) vy = 0;
@@ -395,12 +471,31 @@ export const throwStepRegion = (
     }
   }
 
-  cur = screenOfBox(space, x, y);
+  cur = pick(screenOfBox(space, x, y));
   b = space.bounds[cur];
   const speed = Math.hypot(vx, vy);
   const atRest =
     (y >= b.maxY - 1 && Math.abs(vy) < 1 && Math.abs(vx) < REST_VX) || (bounced && speed < REST_VY && Math.abs(vy) < 1);
   return { x, y, vx, vy, screen: cur, bounced, atRest };
+};
+
+// ---- 积分细分（弹弓无速度上限的配套，不是力度上限）----
+/** 单步允许的最大位移（px）：一帧位移超过它就拆成多步积分 */
+export const SUBSTEP_PX = 8;
+/** 单帧最多拆几步（兜底：极端速度下别把一帧拖成几百次积分） */
+export const SUBSTEP_MAX = 64;
+
+/**
+ * 一帧该积几步（整数 ≥ 1）。**N = 1 是常态**：普通甩抛一帧位移远小于 8px，与旧的单步积分逐位相同；
+ * 只有弹弓拉得很远、初速到几千 px/s 时才会拆多步——否则一帧跨过上百 px 会跳过「落地」与「反弹」
+ * 那几帧，Q 弹、摩擦、atRest 判定都会漏。
+ *
+ * dt 先按 MAX_STEP_DT 夹取（与 throwStep 内部的夹取同源），保证步数算的就是实际要积的时间。
+ */
+export const throwSubsteps = (vx: number, vy: number, dt: number): number => {
+  const travel = Math.hypot(vx, vy) * Math.min(Math.max(dt, 0), MAX_STEP_DT);
+  if (!(travel > SUBSTEP_PX)) return 1;
+  return Math.min(SUBSTEP_MAX, Math.ceil(travel / SUBSTEP_PX));
 };
 
 // ---- 多宠物互相碰撞（宠物 vs 宠物，仅处理「飞行中撞到被撞方」）----

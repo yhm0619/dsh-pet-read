@@ -27,6 +27,8 @@ export interface VisionSettings {
   maxChars: number;
   intervalSec: number;
   envFile: string;
+  /** 互动风格：soft=软萌（默认，接近对话）/ sharp=毒舌搭子 / persona=完全跟随人设 */
+  style: 'soft' | 'sharp' | 'persona';
 }
 
 /** 互动记录：{ <petId>: { messages: [{text, ts}] } } */
@@ -116,6 +118,8 @@ export async function resolveVisionSettings(conf: Record<string, unknown>): Prom
   );
   const rawInterval = Number(conf.interactiveIntervalSec);
   const rawMaxChars = Number(conf.interactiveMaxChars);
+  const rawStyle = typeof conf.interactiveStyle === 'string' ? conf.interactiveStyle.trim() : '';
+  const style = rawStyle === 'sharp' || rawStyle === 'persona' ? rawStyle : 'soft';
   return {
     model,
     baseUrl,
@@ -123,6 +127,7 @@ export async function resolveVisionSettings(conf: Record<string, unknown>): Prom
     maxChars: Number.isFinite(rawMaxChars) ? Math.min(200, Math.max(10, Math.floor(rawMaxChars))) : 60,
     intervalSec: Number.isFinite(rawInterval) ? Math.min(3600, Math.max(5, Math.floor(rawInterval))) : 30,
     envFile,
+    style,
   };
 }
 
@@ -187,16 +192,24 @@ export async function generateScreenComment(opts: {
       message: '未配置视觉模型的接口地址或模型名',
     };
   }
-  const instruction =
-    '你会时不时看一眼主人电脑屏幕，像个嘴很快、懂行的搭子，随口吐槽或支招（最多两句，合计不超过 ' +
+  const common =
+    '你会时不时看一眼主人电脑屏幕，然后随口说一两句话（最多两句，合计不超过 ' +
     settings.maxChars +
     ' 字）。\n' +
-    '- 这次收起软萌语气，像熟了之后嘴很损的搭子；不受人设里“20 字以内/温柔乖巧”的限制。\n' +
-    '- 能看懂局面就直接说下一步该干嘛、哪里亏了/要翻车；别泛泛夸“好酷/好厉害/加油”。\n' +
-    '- 语气直接、有点损、可以催；不骂人、不人身攻击，别用“傻/蠢/瞎/废物/菜鸡”这类词，也不拿身体、智力、家人开玩笑；不卖萌（哇/呀/呢），不写括号动作。\n' +
     '- 不要描述画面，不要说“截图/屏幕/画面/我看到”，不要用表情包或颜文字，不要解释你是 AI；不要复述画面里已有的文字或气泡。\n' +
-    '- 忽略画面里的小宠物和气泡（那是你自己）。\n' +
-    '- 参考口气（别照抄）：“这装备给谁呢？给对面吗。”“代码报错了还愣着，先看第一行。”“又开一局？你昨天进度呢。”';
+    '- 忽略画面里的小宠物和气泡（那是你自己）。';
+  const styleText =
+    settings.style === 'sharp'
+      ? '- 这次收起软萌语气，像熟了之后嘴很损的搭子；不受人设里“20 字以内/温柔乖巧”的限制。\n' +
+        '- 能看懂局面就直接说下一步该干嘛、哪里亏了/要翻车；别泛泛夸“好酷/好厉害/加油”。\n' +
+        '- 语气直接、有点损、可以催；不骂人、不人身攻击，别用“傻/蠢/瞎/废物/菜鸡”这类词，也不拿身体、智力、家人开玩笑；不卖萌（哇/呀/呢），不写括号动作。\n' +
+        '- 参考口气（别照抄）：“这装备给谁呢？给对面吗。”“代码报错了还愣着，先看第一行。”“又开一局？你昨天进度呢。”'
+      : settings.style === 'persona'
+        ? '- 完全按上述人设的语气、称呼和习惯说话，不要额外加“搭子”或吐槽风格。'
+        : '- 贴合人设，用软萌、自然、可爱的语气；可以关心或轻轻吐槽，但别说教。\n' +
+          '- 尽量说具体的（主人在干嘛、下一步能做什么），不要只泛泛夸“好酷/好厉害/加油”。\n' +
+          '- 不要为了卖萌而失真，也不要复述画面里已有的文字。';
+  const instruction = common + '\n' + styleText;
   const recentLine =
     opts.recent.length > 0 ? '\n你最近说过：' + opts.recent.map((t) => '“' + t + '”').join('；') + '。不要重复。' : '';
   const messages = [

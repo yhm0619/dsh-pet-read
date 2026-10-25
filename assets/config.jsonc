@@ -65,6 +65,8 @@
   // API Key 优先级：设置页输入（明文存本机用户配置）> 环境变量 > interactiveVisionEnvFile 指向的 .env；仓库默认不含 Key。
   "interactiveIntervalSec": 30,
   "interactiveMaxChars": 60,
+  // 互动风格：soft=软萌（默认，接近对话）/ sharp=毒舌搭子 / persona=完全跟随人设
+  "interactiveStyle": "soft",
   // 视觉服务商：zhipu / doubao / openai / custom（设置页「视觉模型」下拉框写的就是它）
   "interactiveVisionProvider": "zhipu",
   "interactiveVisionModel": "glm-4.5v",

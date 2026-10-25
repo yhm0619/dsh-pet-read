@@ -223,6 +223,12 @@ export const zh = {
   sizeHint: '高度自动 = 宽度 × 9/16。',
   nameLabel: '名字',
   nameHint: '显示名：鼠标悬浮宠物时弹出，也会加进 AI 人设（你的名字是 X）。可重复，留空按宠物 id 处理。',
+  interactiveStyleLabel: '互动碎碎念风格',
+  interactiveStyleHint:
+    '只影响互动碎碎念的语气：软萌接近对话；毒舌是犀利吐槽；跟随人设则完全按上面的人设说话，不加额外风格。',
+  'interactiveStyle.soft': '软萌（接近对话）',
+  'interactiveStyle.sharp': '毒舌搭子（犀利吐槽）',
+  'interactiveStyle.persona': '完全跟随人设',
   visionProviderLabel: '视觉服务商',
   visionProviderHint: '互动碎碎念用哪家的视觉接口；换服务商会自动填入预设的接口地址和模型（仍可手改）。',
   'visionProvider.zhipu': '智谱 GLM',
@@ -420,6 +426,12 @@ export const en = {
   nameLabel: 'Name',
   nameHint:
     'Shown on hover and added to AI personas ("your name is X"). Duplicates allowed; empty falls back to the pet id.',
+  interactiveStyleLabel: 'Interactive style',
+  interactiveStyleHint:
+    'Only affects interactive screen-reading: soft stays close to chat; sharp is the roast-y friend; persona follows the persona above with no extra style.',
+  'interactiveStyle.soft': 'Soft (close to chat)',
+  'interactiveStyle.sharp': 'Sharp roast buddy',
+  'interactiveStyle.persona': 'Follow persona exactly',
   visionProviderLabel: 'Vision provider',
   visionProviderHint: 'Which vision endpoint interactive chatter uses. Changing it fills that provider’s default URL/model; both remain editable.',
   'visionProvider.zhipu': 'Zhipu GLM',
@@ -1095,6 +1107,8 @@ export function makePetConfigSection(rt: {
     const [visionProvider, setVisionProvider] = useState('zhipu');
     const [visionModel, setVisionModel] = useState('glm-4.5v');
     const [visionBaseUrl, setVisionBaseUrl] = useState('https://open.bigmodel.cn/api/paas/v4');
+    // 互动碎碎念风格：soft=软萌（默认）/ sharp=毒舌搭子 / persona=完全跟随人设
+    const [interactiveStyle, setInteractiveStyle] = useState('soft');
     // 人设导入反馈（就地显示在人设输入框下方，不占用全局保存提示）
     const [personaImportMsg, setPersonaImportMsg] = useState<{ kind: 'ok' | 'err' | ''; text: string }>({
       kind: '',
@@ -1120,6 +1134,9 @@ export function makePetConfigSection(rt: {
       }
       if (typeof m.interactiveVisionModel === 'string') setVisionModel(m.interactiveVisionModel);
       if (typeof m.interactiveVisionBaseUrl === 'string') setVisionBaseUrl(m.interactiveVisionBaseUrl);
+      if (m.interactiveStyle === 'soft' || m.interactiveStyle === 'sharp' || m.interactiveStyle === 'persona') {
+        setInteractiveStyle(m.interactiveStyle);
+      }
       setSelId((id) => (loadedPets.some((p) => p.id === id) ? id : (loadedPets[0]?.id ?? '')));
       if (typeof m.notificationsEnabled === 'boolean') setNotifyEnabled(m.notificationsEnabled);
       if (typeof m.whisperImageEnabled === 'boolean') setWhisperImage(m.whisperImageEnabled);
@@ -1388,6 +1405,7 @@ export function makePetConfigSection(rt: {
           interactiveVisionProvider: visionProvider,
           interactiveVisionModel: visionModelText,
           interactiveVisionBaseUrl: visionBaseUrlText,
+          interactiveStyle: interactiveStyle,
           // 视觉模型 API Key（互动碎碎念；空串 = 清除已保存 Key，回退环境变量/.env）
           interactiveVisionApiKey: visionApiKey,
           // 字体（全局默认白名单字段）：宿主用 fontValid 整段校验（family 白名单 / size 4~200 /
@@ -1771,6 +1789,22 @@ export function makePetConfigSection(rt: {
                     toggleCell('fixedEnabled', !!cur.fixedEnabled, busy, (v) => updateSel({ fixedEnabled: v }), true),
                   ],
                 }),
+
+                // 互动碎碎念风格（全局）：只影响“互动碎碎念”的语气，不改变对话/人设本身。
+                field(
+                  t('interactiveStyleLabel'),
+                  h('select', {
+                    className: inputClass,
+                    value: interactiveStyle,
+                    disabled: busy,
+                    onChange: (e: ChangeEvent<HTMLSelectElement>) => setInteractiveStyle(e.target.value),
+                    style: { width: '100%' },
+                    children: ['soft', 'sharp', 'persona'].map((s) =>
+                      h('option', { key: s, value: s, children: t('interactiveStyle.' + s) }),
+                    ),
+                  }),
+                  t('interactiveStyleHint'),
+                ),
 
                 // 互动碎碎念的视觉服务商 / 模型 / 接口地址（全局）：换服务商自动填预设，仍可手改。
                 field(

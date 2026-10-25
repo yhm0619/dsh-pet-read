@@ -8,8 +8,9 @@
 
 - **互动碎碎念**：右键「碎碎念」子菜单 = **随机碎碎念**（上游原功能）/ **互动碎碎念**（新）。开启后桌面端按 `interactiveIntervalSec`（默认 30 秒）截主屏 → 宿主调视觉模型 → 写进上游统一的 `/state` 气泡链路，显示在宠物头顶；再次点「互动碎碎念（已开启）」关闭。单向吐槽、不用回复、不带表情包。
 - **人设导入**：设置页每只宠物的「人设（可选）」输入框下新增「导入文本」，支持 `.txt` / `.md` / `.markdown` / `.json`（JSON 取 `whisperPrompt` / `persona` / `prompt` / `text`，也兼容 `main.whisperPrompt`）；导入后点「保存」生效。
-- **视觉模型设置（设置页）**：每只宠物卡片的人设上方有「视觉服务商 / 视觉模型 / 接口地址 / 视觉模型 API Key」——服务商可选智谱 GLM、豆包 / 火山方舟、OpenAI、自定义 OpenAI 兼容；换服务商会自动填预设的地址和模型，仍可手改。默认为智谱 `glm-4.5v`（关思考，约 2~4 秒），想免费/低延迟可改 `glm-4v-flash`。
-- 新增配置：`interactiveIntervalSec` / `interactiveMaxChars` / `interactiveVisionProvider` / `interactiveVisionModel` / `interactiveVisionBaseUrl` / `interactiveVisionApiKey` / `interactiveVisionEnvFile`。API Key 的优先级：设置页输入（明文存本机 `main-config.jsonc`）> 环境变量 > 本地 `.env`；仓库内不含任何 Key。
+- **互动风格（设置页）**：人设上方可选「软萌（默认，接近对话）/ 毒舌搭子（犀利吐槽）/ 完全跟随人设」；只影响互动碎碎念，不改变对话与基础人设。
+- **视觉模型设置（设置页）**：每只宠物卡片的人设上方有「互动风格 / 视觉服务商 / 视觉模型 / 接口地址 / 视觉模型 API Key」——服务商可选智谱 GLM、豆包 / 火山方舟、OpenAI、自定义 OpenAI 兼容；换服务商会自动填预设的地址和模型，仍可手改。默认为智谱 `glm-4.5v`（关思考，约 2~4 秒），想免费/低延迟可改 `glm-4v-flash`。
+- 新增配置：`interactiveIntervalSec` / `interactiveMaxChars` / `interactiveStyle` / `interactiveVisionProvider` / `interactiveVisionModel` / `interactiveVisionBaseUrl` / `interactiveVisionApiKey` / `interactiveVisionEnvFile`。API Key 的优先级：设置页输入（明文存本机 `main-config.jsonc`）> 环境变量 > 本地 `.env`；仓库内不含任何 Key。互动风格默认 `soft`（软萌），可在设置页切 `sharp` / `persona`。
 - 交互限制：只有桌面模式能静默截屏；浏览器端点「互动碎碎念」只会提示需要桌面模式。
 
 ## 安装本 fork

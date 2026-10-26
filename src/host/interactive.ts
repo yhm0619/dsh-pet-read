@@ -259,17 +259,45 @@ export async function generateScreenComment(opts: {
     watching: '看视频',
     reading: '看文档 / 阅读',
     browsing: '逛网页',
+    social: '刷评论 / 看网友聊天',
     chatting: '聊天',
     working: '办公 / 处理事情',
     idle: '发呆 / 桌面',
     other: '在忙自己的事',
   };
+  /** 模型死活要说“密密麻麻”时的兜底：按活动给一句具体的，绝不把文字密度当内容 */
+  const activityFallback = (activity: string): string => {
+    switch (activity) {
+      case 'coding':
+        return '又在写代码呀，这段还顺利吗？';
+      case 'debugging':
+        return '又在跟报错较劲呀，先看第一行？';
+      case 'gaming':
+        return '又开一局呀，这局能赢吗？';
+      case 'watching':
+        return '又在看视频呀，看的什么好东西？';
+      case 'reading':
+        return '又在看文章呀，记得让眼睛歇会儿。';
+      case 'browsing':
+        return '又在逛网页呀，别逛太久哦。';
+      case 'social':
+        return '又在刷评论呀，看到什么热闹了？';
+      case 'chatting':
+        return '又在聊天呀，聊得这么投入？';
+      case 'working':
+        return '又在忙呀，记得喝口水。';
+      case 'idle':
+        return '又在发呆呀，要不要陪我玩会儿？';
+      default:
+        return '主人又在忙呀，记得歇一会儿。';
+    }
+  };
   const classify = async (): Promise<{ activity: string; detail: string } | null> => {
     const system =
       '你是屏幕活动识别器。只看截图，判断主人正在做什么。只输出一个 JSON 对象，不要 markdown、不要解释：\n' +
-      '{"activity":"coding|debugging|gaming|watching|reading|browsing|chatting|working|idle|other","detail":"不超过30字的客观细节"}\n' +
-      '规则：代码编辑器 / IDE / 终端 / 报错堆栈 / 代码文件 → coding 或 debugging；即使代码出现在聊天或网页窗口里，也优先归 coding/debugging；网页 → browsing；文档 → reading；游戏 → gaming；视频 → watching；没有代码的聊天 → chatting。\n' +
-      '不要用“密密麻麻的字 / 很多东西 / 很酷”这种笼统描述；写代码就直接写“写代码/改代码/看报错”。';
+      '{"activity":"coding|debugging|gaming|watching|reading|browsing|social|chatting|working|idle|other","detail":"不超过30字的客观细节"}\n' +
+      '规则：代码编辑器 / IDE / 终端 / 报错堆栈 / 代码文件 → coding 或 debugging；即使代码出现在聊天或网页窗口里，也优先归 coding/debugging；网页 → browsing；文档 / 长文章 → reading；游戏 → gaming；视频播放 → watching；抖音 / 快手 / 小红书 / 微博 / B站 / 知乎等评论、帖子、社交信息流 → social；纯聊天窗口 → chatting。\n' +
+      '不要用“密密麻麻的字 / 很多东西 / 很酷”这种笼统描述；刷评论就写“刷评论”，看文章就写“看文章”，写代码就写“写代码/改代码/看报错”。';
     const r = await callChat(
       [
         { role: 'system', content: system },
@@ -294,8 +322,8 @@ export async function generateScreenComment(opts: {
       const rawActivity = typeof o.activity === 'string' ? o.activity.trim() : 'other';
       const activity = ACTIVITY_LABEL[rawActivity] ? rawActivity : 'other';
       let detail = typeof o.detail === 'string' ? o.detail.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
-      if (/密密麻麻|很多字|一堆字/.test(detail) && (activity === 'coding' || activity === 'debugging')) {
-        detail = '屏幕上是代码 / 编辑器';
+      if (/密密麻麻|很多字|一堆字|满屏的字|看这些字/.test(detail)) {
+        detail = activity === 'coding' || activity === 'debugging' ? '屏幕上是代码 / 编辑器' : '';
       }
       return { activity, detail };
     } catch {
@@ -308,6 +336,7 @@ export async function generateScreenComment(opts: {
     settings.maxChars +
     ' 字）。\n' +
     '- 不要描述画面，不要说“截图/屏幕/画面/我看到”，不要用表情包或颜文字，不要解释你是 AI；不要复述画面里已有的文字或气泡。\n' +
+    '- 不要用“密密麻麻 / 一堆字 / 很多字 / 满屏的字 / 看字”这种说法；按活动说具体的事（刷评论 / 写代码 / 看文章 / 打游戏 / 看视频）。\n' +
     '- 忽略画面里的小宠物和气泡（那是你自己）。';
   const styleText =
     settings.style === 'sharp'
@@ -344,6 +373,7 @@ export async function generateScreenComment(opts: {
   };
 
   const scene = await classify();
+  if (process.env.DSH_PET_DEBUG) console.log('[dsh-pet:interactive] scene=', JSON.stringify(scene));
   if (scene) {
     const sceneLine =
       '主人在屏幕上：' +
@@ -360,7 +390,35 @@ export async function generateScreenComment(opts: {
       600,
     );
     if (gen.ok) {
+      if (process.env.DSH_PET_DEBUG) console.log('[dsh-pet:interactive] gen=', gen.text);
+      const vague = /密密麻麻|一堆字|很多字|满屏的字|看这些字|看字/;
+      const sceneLabel = ACTIVITY_LABEL[scene.activity] ?? ACTIVITY_LABEL.other;
       const first = trimComment(gen.text, settings.maxChars);
+      if (first && vague.test(first)) {
+        // 模型还是把“文字多”当成内容：明确禁止后再要一次；仍不改就按活动给兜底句
+        const retrySystem =
+          system +
+          '\n你刚才说：“' +
+          first +
+          '”。不要用“密密麻麻 / 一堆字 / 很多字 / 看字”这类说法；按“' +
+          sceneLabel +
+          '”这个活动说具体的事。';
+        const retry = await callChat(
+          [
+            { role: 'system', content: retrySystem },
+            { role: 'user', content: '换一句，说具体活动。' },
+          ],
+          1,
+          600,
+        );
+        if (retry.ok) {
+          const second = trimComment(retry.text, settings.maxChars);
+          if (second && !vague.test(second) && !opts.recent.some((r) => tooSimilar(second, r))) {
+            return { ok: true, text: second };
+          }
+        }
+        return { ok: true, text: activityFallback(scene.activity) };
+      }
       if (first && !opts.recent.some((r) => tooSimilar(first, r))) return { ok: true, text: first };
       if (first) {
         // 和最近说过的太像：再要一次“接着上一句往下说”的版本；仍撞车就安静一轮，避免复读
@@ -379,7 +437,9 @@ export async function generateScreenComment(opts: {
         );
         if (retry.ok) {
           const second = trimComment(retry.text, settings.maxChars);
-          if (second && !opts.recent.some((r) => tooSimilar(second, r))) return { ok: true, text: second };
+          if (second && !vague.test(second) && !opts.recent.some((r) => tooSimilar(second, r))) {
+            return { ok: true, text: second };
+          }
         }
         return { ok: false, reason: 'duplicate', message: '画面没变化，这一轮没有生成新的话' };
       }
@@ -393,7 +453,7 @@ export async function generateScreenComment(opts: {
     common +
     '\n' +
     styleText +
-    '\n先判断主人在做什么（写代码 / 看代码 / 看报错 / 打游戏 / 看视频 / 看网页 / 聊天 / 发呆），再按这个说；不要把画面笼统说成“密密麻麻的字”或“很多东西”。' +
+    '\n先判断主人在做什么（写代码 / 看代码 / 看报错 / 打游戏 / 看视频 / 看网页 / 刷评论 / 聊天 / 发呆），再按这个说；绝对不要把画面笼统说成“密密麻麻的字”或“很多东西”。' +
     recentLine +
     sameLine;
   const fallback = await callChat(
@@ -411,8 +471,12 @@ export async function generateScreenComment(opts: {
     600,
   );
   if (!fallback.ok) return { ok: false, reason: 'generate-error', message: fallback.message };
+  if (process.env.DSH_PET_DEBUG) console.log('[dsh-pet:interactive] fallback=', fallback.text);
   const text = trimComment(fallback.text, settings.maxChars);
   if (!text) return { ok: false, reason: 'generate-error', message: '视觉模型没有返回文字' };
+  if (/密密麻麻|一堆字|很多字|满屏的字|看这些字|看字/.test(text)) {
+    return { ok: true, text: scene ? activityFallback(scene.activity) : activityFallback('other') };
+  }
   return opts.recent.some((r) => tooSimilar(text, r))
     ? { ok: false, reason: 'duplicate', message: '画面没变化，这一轮没有生成新的话' }
     : { ok: true, text };

@@ -1865,10 +1865,14 @@ class PetSprite {
       const data = await res.json().catch(() => null);
       if (!data || data.ok !== true) {
         const reason = data && data.reason;
-        failure =
-          reason === 'vision-missing'
-            ? '还没配置视觉模型 API Key 哦'
-            : '识屏失败：' + ((data && data.message) || reason || '未知错误');
+        if (reason === 'duplicate' || reason === 'busy') {
+          // 画面没变且没有生成新话 / 上一轮还没结束：这一轮安静跳过，不弹错误气泡
+        } else {
+          failure =
+            reason === 'vision-missing'
+              ? '还没配置视觉模型 API Key 哦'
+              : '识屏失败：' + ((data && data.message) || reason || '未知错误');
+        }
       } else {
         this.chatInteractiveErrShown = false;
       }

@@ -1727,7 +1727,7 @@ export function apply(ctx: any): void {
         }
         const log = await readInteractiveLog(interactiveLogPath);
         const recent = (Array.isArray(log[petId]?.messages) ? log[petId].messages : [])
-          .slice(-3)
+          .slice(-5)
           .map((m) => m.text);
         const result = await generateScreenComment({
           system: petSystemPrompt(who),

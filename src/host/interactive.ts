@@ -162,7 +162,7 @@ export function trimComment(input: string, maxChars: number): string {
 /** 视觉模型生成的失败原因：key 缺失单独区分（提示去配置），其余为接口/解析错误 */
 export type ScreenCommentResult =
   | { ok: true; text: string }
-  | { ok: false; reason: 'vision-missing' | 'config-error' | 'generate-error'; message?: string };
+  | { ok: false; reason: 'vision-missing' | 'config-error' | 'generate-error' | 'duplicate'; message?: string };
 
 /**
  * 调一次视觉模型，直接产出「随口吐槽」（不再描述画面）。
@@ -176,6 +176,7 @@ export async function generateScreenComment(opts: {
   imageDataUrl: string;
   settings: VisionSettings;
   recent: string[];
+  sameScreen?: boolean;
 }): Promise<ScreenCommentResult> {
   const { settings } = opts;
   if (!settings.apiKey) {
@@ -192,6 +193,116 @@ export async function generateScreenComment(opts: {
       message: '未配置视觉模型的接口地址或模型名',
     };
   }
+  const tokenCap = /^glm-4v-/i.test(settings.model) ? 512 : /^glm-5/i.test(settings.model) ? 2000 : 1200;
+  // 推理型视觉模型（GLM-4.5V/4.6V）默认关思考，响应快且仍能看懂画面；GLM-5 系只支持 low/high/max，
+  // 用 low 控制延迟。GLM-4V-Flash/Plus 是普通模型，不能传 thinking 字段。
+  const thinkingType = /^glm-(4\.5|4\.6)/i.test(settings.model)
+    ? 'disabled'
+    : /^glm-5/i.test(settings.model)
+      ? 'low'
+      : '';
+  const send = (payload: Record<string, unknown>): Promise<Response> =>
+    fetch(settings.baseUrl.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + settings.apiKey },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
+    });
+  const callChat = async (
+    messages: Array<Record<string, unknown>>,
+    temperature: number,
+    maxTokens?: number,
+  ): Promise<{ ok: true; text: string } | { ok: false; message: string }> => {
+    const makePayload = (withThinking: boolean, tokens: number): Record<string, unknown> => ({
+      model: settings.model,
+      messages,
+      temperature,
+      max_tokens: tokens,
+      ...(withThinking && thinkingType ? { thinking: { type: thinkingType } } : {}),
+    });
+    let res: Response;
+    try {
+      res = await send(makePayload(true, maxTokens ?? tokenCap));
+      // 个别账号/模型对 thinking 字段返回 400：不带该字段重试一次（推理模型放宽预算，避免只输出思考）
+      if (!res.ok && thinkingType && res.status === 400) {
+        res = await send(makePayload(false, 2000));
+      }
+    } catch (e) {
+      return { ok: false, message: '视觉接口请求失败：' + (e instanceof Error ? e.message : String(e)) };
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { ok: false, message: '视觉接口 HTTP ' + res.status + (body ? '：' + body.slice(0, 160) : '') };
+    }
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      return { ok: false, message: '视觉接口返回非 JSON' };
+    }
+    const raw = (data as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content;
+    const text =
+      typeof raw === 'string'
+        ? raw
+        : Array.isArray(raw)
+          ? raw
+              .map((p) => (p && typeof p === 'object' && 'text' in p ? String((p as { text?: unknown }).text ?? '') : ''))
+              .join('')
+          : '';
+    return { ok: true, text };
+  };
+
+  const ACTIVITY_LABEL: Record<string, string> = {
+    coding: '写代码',
+    debugging: '调代码 / 看报错',
+    gaming: '打游戏',
+    watching: '看视频',
+    reading: '看文档 / 阅读',
+    browsing: '逛网页',
+    chatting: '聊天',
+    working: '办公 / 处理事情',
+    idle: '发呆 / 桌面',
+    other: '在忙自己的事',
+  };
+  const classify = async (): Promise<{ activity: string; detail: string } | null> => {
+    const system =
+      '你是屏幕活动识别器。只看截图，判断主人正在做什么。只输出一个 JSON 对象，不要 markdown、不要解释：\n' +
+      '{"activity":"coding|debugging|gaming|watching|reading|browsing|chatting|working|idle|other","detail":"不超过30字的客观细节"}\n' +
+      '规则：代码编辑器 / IDE / 终端 / 报错堆栈 / 代码文件 → coding 或 debugging；即使代码出现在聊天或网页窗口里，也优先归 coding/debugging；网页 → browsing；文档 → reading；游戏 → gaming；视频 → watching；没有代码的聊天 → chatting。\n' +
+      '不要用“密密麻麻的字 / 很多东西 / 很酷”这种笼统描述；写代码就直接写“写代码/改代码/看报错”。';
+    const r = await callChat(
+      [
+        { role: 'system', content: system },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '识别这张屏幕截图。' },
+            { type: 'image_url', image_url: { url: opts.imageDataUrl } },
+          ],
+        },
+      ],
+      0.2,
+      400,
+    );
+    if (!r.ok) return null;
+    const raw = r.text.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      const o = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+      const rawActivity = typeof o.activity === 'string' ? o.activity.trim() : 'other';
+      const activity = ACTIVITY_LABEL[rawActivity] ? rawActivity : 'other';
+      let detail = typeof o.detail === 'string' ? o.detail.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+      if (/密密麻麻|很多字|一堆字/.test(detail) && (activity === 'coding' || activity === 'debugging')) {
+        detail = '屏幕上是代码 / 编辑器';
+      }
+      return { activity, detail };
+    } catch {
+      return null;
+    }
+  };
+
   const common =
     '你会时不时看一眼主人电脑屏幕，然后随口说一两句话（最多两句，合计不超过 ' +
     settings.maxChars +
@@ -202,86 +313,109 @@ export async function generateScreenComment(opts: {
     settings.style === 'sharp'
       ? '- 这次收起软萌语气，像熟了之后嘴很损的搭子；不受人设里“20 字以内/温柔乖巧”的限制。\n' +
         '- 能看懂局面就直接说下一步该干嘛、哪里亏了/要翻车；别泛泛夸“好酷/好厉害/加油”。\n' +
-        '- 语气直接、有点损、可以催；不骂人、不人身攻击，别用“傻/蠢/瞎/废物/菜鸡”这类词，也不拿身体、智力、家人开玩笑；不卖萌（哇/呀/呢），不写括号动作。\n' +
-        '- 参考口气（别照抄）：“这装备给谁呢？给对面吗。”“代码报错了还愣着，先看第一行。”“又开一局？你昨天进度呢。”'
+        '- 语气直接、有点损、可以催；不骂人、不人身攻击，别用“傻/蠢/瞎/废物/菜鸡”这类词，也不拿身体、智力、家人开玩笑；不卖萌（哇/呀/呢），不写括号动作。'
       : settings.style === 'persona'
         ? '- 完全按上述人设的语气、称呼和习惯说话，不要额外加“搭子”或吐槽风格。'
         : '- 贴合人设，用软萌、自然、可爱的语气；可以关心或轻轻吐槽，但别说教。\n' +
           '- 尽量说具体的（主人在干嘛、下一步能做什么），不要只泛泛夸“好酷/好厉害/加油”。\n' +
           '- 不要为了卖萌而失真，也不要复述画面里已有的文字。';
-  const instruction = common + '\n' + styleText;
   const recentLine =
-    opts.recent.length > 0 ? '\n你最近说过：' + opts.recent.map((t) => '“' + t + '”').join('；') + '。不要重复。' : '';
-  const messages = [
-    { role: 'system', content: opts.system + '\n' + instruction + recentLine },
-    {
-      role: 'user',
-      content: [
-        { type: 'text', text: '看看屏幕，随口说一两句。' },
-        { type: 'image_url', image_url: { url: opts.imageDataUrl } },
-      ],
-    },
-  ];
-  // 推理型视觉模型（GLM-4.5V/4.6V）默认关思考，响应快且仍能看懂画面；GLM-5 系只支持 low/high/max，
-  // 用 low 控制延迟。GLM-4V-Flash/Plus 是普通模型，不能传 thinking 字段。
-  const thinkingType = /^glm-(4\.5|4\.6)/i.test(settings.model)
-    ? 'disabled'
-    : /^glm-5/i.test(settings.model)
-      ? 'low'
+    opts.recent.length > 0
+      ? '\n你最近说过：' +
+        opts.recent.map((t) => '“' + t + '”').join('；') +
+        '。不要重复这些句子或只换几个字；如果还是同一件事，就接着说下一层（进展 / 卡点 / 提醒休息 / 下一步），不要重新观察；如果活动变了，就以新活动为准，不要硬接旧话题。'
       : '';
-  const makePayload = (withThinking: boolean): Record<string, unknown> => ({
-    model: settings.model,
-    messages,
-    temperature: 0.95,
-    // GLM-4V-Flash/Plus 的 max_tokens 上限是 1024；推理型 4.5V/5 留足思考预算
-    max_tokens: /^glm-4v-/i.test(settings.model) ? 512 : /^glm-5/i.test(settings.model) ? 2000 : 1200,
-    ...(withThinking && thinkingType ? { thinking: { type: thinkingType } } : {}),
-  });
-  const send = (payload: Record<string, unknown>): Promise<Response> =>
-    fetch(settings.baseUrl.replace(/\/$/, '') + '/chat/completions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + settings.apiKey },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
-    });
-  let res: Response;
-  try {
-    res = await send(makePayload(true));
-    // 个别账号/模型对 thinking 字段返回 400：不带该字段重试一次（推理模型放宽预算，避免只输出思考）
-    if (!res.ok && thinkingType && res.status === 400) {
-      res = await send({ ...makePayload(false), max_tokens: 2000 });
+  const sameLine = opts.sameScreen ? '\n这次画面和上次基本没变：不要重新描述，接着上一句往下说。' : '';
+  const normalize = (s: string): string =>
+    s
+      .replace(/[\s，。！？!?、,.…“”"'‘’（）()【】\[\]]/g, '')
+      .toLowerCase();
+  const tooSimilar = (a: string, b: string): boolean => {
+    const x = normalize(a);
+    const y = normalize(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    if ((x.includes(y) || y.includes(x)) && Math.min(x.length, y.length) >= 6) return true;
+    const sa = new Set(Array.from(x));
+    const sb = new Set(Array.from(y));
+    let inter = 0;
+    for (const c of sa) if (sb.has(c)) inter += 1;
+    return inter / (sa.size + sb.size - inter) >= 0.78;
+  };
+
+  const scene = await classify();
+  if (scene) {
+    const sceneLine =
+      '主人在屏幕上：' +
+      (ACTIVITY_LABEL[scene.activity] ?? ACTIVITY_LABEL.other) +
+      (scene.detail ? '（' + scene.detail + '）' : '') +
+      '。';
+    const system = opts.system + '\n' + common + '\n' + styleText + '\n' + sceneLine + recentLine + sameLine;
+    const gen = await callChat(
+      [
+        { role: 'system', content: system },
+        { role: 'user', content: '根据主人的活动，说一两句。' },
+      ],
+      0.95,
+      600,
+    );
+    if (gen.ok) {
+      const first = trimComment(gen.text, settings.maxChars);
+      if (first && !opts.recent.some((r) => tooSimilar(first, r))) return { ok: true, text: first };
+      if (first) {
+        // 和最近说过的太像：再要一次“接着上一句往下说”的版本；仍撞车就安静一轮，避免复读
+        const retrySystem =
+          system +
+          '\n你上次已经说过：“' +
+          opts.recent[opts.recent.length - 1] +
+          '”。这次不能重复它或只改几个字；如果还是同一件事，就接着说下一层：进展、卡点、提醒休息或下一步操作。';
+        const retry = await callChat(
+          [
+            { role: 'system', content: retrySystem },
+            { role: 'user', content: '再说一句不同的话。' },
+          ],
+          1,
+          600,
+        );
+        if (retry.ok) {
+          const second = trimComment(retry.text, settings.maxChars);
+          if (second && !opts.recent.some((r) => tooSimilar(second, r))) return { ok: true, text: second };
+        }
+        return { ok: false, reason: 'duplicate', message: '画面没变化，这一轮没有生成新的话' };
+      }
     }
-  } catch (e) {
-    return {
-      ok: false,
-      reason: 'generate-error',
-      message: '视觉接口请求失败：' + (e instanceof Error ? e.message : String(e)),
-    };
   }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    return {
-      ok: false,
-      reason: 'generate-error',
-      message: '视觉接口 HTTP ' + res.status + (body ? '：' + body.slice(0, 160) : ''),
-    };
-  }
-  let data: unknown;
-  try {
-    data = await res.json();
-  } catch {
-    return { ok: false, reason: 'generate-error', message: '视觉接口返回非 JSON' };
-  }
-  const raw = (data as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content;
-  const text =
-    typeof raw === 'string'
-      ? raw
-      : Array.isArray(raw)
-        ? raw.map((p) => (p && typeof p === 'object' && 'text' in p ? String((p as { text?: unknown }).text ?? '') : '')).join('')
-        : '';
-  const cleaned = trimComment(text, settings.maxChars);
-  if (!cleaned) return { ok: false, reason: 'generate-error', message: '视觉模型没有返回文字' };
-  return { ok: true, text: cleaned };
+
+  // 分类或生成失败：回退到单次看图（仍然先判断活动，避免“密密麻麻的字”式描述）
+  const fallbackSystem =
+    opts.system +
+    '\n' +
+    common +
+    '\n' +
+    styleText +
+    '\n先判断主人在做什么（写代码 / 看代码 / 看报错 / 打游戏 / 看视频 / 看网页 / 聊天 / 发呆），再按这个说；不要把画面笼统说成“密密麻麻的字”或“很多东西”。' +
+    recentLine +
+    sameLine;
+  const fallback = await callChat(
+    [
+      { role: 'system', content: fallbackSystem },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '看看屏幕，说一两句。' },
+          { type: 'image_url', image_url: { url: opts.imageDataUrl } },
+        ],
+      },
+    ],
+    1,
+    600,
+  );
+  if (!fallback.ok) return { ok: false, reason: 'generate-error', message: fallback.message };
+  const text = trimComment(fallback.text, settings.maxChars);
+  if (!text) return { ok: false, reason: 'generate-error', message: '视觉模型没有返回文字' };
+  return opts.recent.some((r) => tooSimilar(text, r))
+    ? { ok: false, reason: 'duplicate', message: '画面没变化，这一轮没有生成新的话' }
+    : { ok: true, text };
 }
 
 /** 读互动记录；文件不存在/损坏 → 空记录（不阻塞窗口打开） */

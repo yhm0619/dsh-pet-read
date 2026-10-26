@@ -1,6 +1,6 @@
 {
   "name": "dsh-pet",
-  "version": "0.3.8-read.4",
+  "version": "0.3.8-read.6",
   "description": "基于 dsh-pet 0.3.8 的互动碎碎念版：每 30 秒识屏，用视觉模型在宠物头顶随口吐槽；新增人设导入。",
   "icon": "assets/logo.png",
   "keywords": [

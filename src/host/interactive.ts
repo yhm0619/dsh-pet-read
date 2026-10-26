@@ -177,8 +177,11 @@ export async function generateScreenComment(opts: {
   settings: VisionSettings;
   recent: string[];
   sameScreen?: boolean;
+  /** 画面指纹持续不变的秒数（宿主按截屏 sceneHash 计算）；>=90 秒按“发呆/看入神”处理 */
+  idleSeconds?: number;
 }): Promise<ScreenCommentResult> {
   const { settings } = opts;
+  const idleSeconds = Math.max(0, Math.floor(opts.idleSeconds ?? 0));
   if (!settings.apiKey) {
     return {
       ok: false,
@@ -258,6 +261,7 @@ export async function generateScreenComment(opts: {
     gaming: '打游戏',
     watching: '看视频',
     reading: '看文档 / 阅读',
+    studying: '学习 / 看课程 / 写作业',
     browsing: '逛网页',
     social: '刷评论 / 看网友聊天',
     chatting: '聊天',
@@ -278,6 +282,8 @@ export async function generateScreenComment(opts: {
         return '又在看视频呀，看的什么好东西？';
       case 'reading':
         return '又在看文章呀，记得让眼睛歇会儿。';
+      case 'studying':
+        return '又在学习呀，今天学什么？';
       case 'browsing':
         return '又在逛网页呀，别逛太久哦。';
       case 'social':
@@ -295,9 +301,14 @@ export async function generateScreenComment(opts: {
   const classify = async (): Promise<{ activity: string; detail: string } | null> => {
     const system =
       '你是屏幕活动识别器。只看截图，判断主人正在做什么。只输出一个 JSON 对象，不要 markdown、不要解释：\n' +
-      '{"activity":"coding|debugging|gaming|watching|reading|browsing|social|chatting|working|idle|other","detail":"不超过30字的客观细节"}\n' +
-      '规则：代码编辑器 / IDE / 终端 / 报错堆栈 / 代码文件 → coding 或 debugging；即使代码出现在聊天或网页窗口里，也优先归 coding/debugging；网页 → browsing；文档 / 长文章 → reading；游戏 → gaming；视频播放 → watching；抖音 / 快手 / 小红书 / 微博 / B站 / 知乎等评论、帖子、社交信息流 → social；纯聊天窗口 → chatting。\n' +
-      '不要用“密密麻麻的字 / 很多东西 / 很酷”这种笼统描述；刷评论就写“刷评论”，看文章就写“看文章”，写代码就写“写代码/改代码/看报错”。';
+      '{"activity":"coding|debugging|gaming|watching|reading|studying|browsing|social|chatting|working|idle|other","detail":"不超过30字的客观细节"}\n' +
+      '规则：代码编辑器 / IDE / 终端 / 报错堆栈 / 代码文件 → coding 或 debugging；即使代码出现在聊天或网页窗口里，也优先归 coding/debugging；网课 / 课程视频 / 笔记 / 作业 / 刷题 / 教材 / 学习资料 → studying；普通文档 / 长文章 → reading；网页 → browsing；游戏 → gaming；视频播放 → watching；抖音 / 快手 / 小红书 / 微博 / B站 / 知乎等评论、帖子、社交信息流 → social；纯聊天窗口 → chatting；桌面 / 发呆 / 长时间没动 → idle。\n' +
+      '不要用“密密麻麻的字 / 很多东西 / 很酷”这种笼统描述；刷评论就写“刷评论”，看文章就写“看文章”，写代码就写“写代码/改代码/看报错”。' +
+      (idleSeconds >= 90
+        ? '\n注意：屏幕已经 ' +
+          idleSeconds +
+          ' 秒没有明显变化。如果画面不是正在播放的视频 / 游戏 / 运行中的代码，活动优先归 idle（发呆 / 看入神）。'
+        : '');
     const r = await callChat(
       [
         { role: 'system', content: system },
@@ -355,6 +366,12 @@ export async function generateScreenComment(opts: {
         '。不要重复这些句子或只换几个字；如果还是同一件事，就接着说下一层（进展 / 卡点 / 提醒休息 / 下一步），不要重新观察；如果活动变了，就以新活动为准，不要硬接旧话题。'
       : '';
   const sameLine = opts.sameScreen ? '\n这次画面和上次基本没变：不要重新描述，接着上一句往下说。' : '';
+  const idleLine =
+    idleSeconds >= 90
+      ? '\n屏幕已经 ' +
+        idleSeconds +
+        ' 秒没有明显变化：像发现主人愣神或看入神一样，先说“盯着屏幕好一会儿没动”或“看入神了？”，不要描述画面；不要用“密密麻麻”。'
+      : '';
   const normalize = (s: string): string =>
     s
       .replace(/[\s，。！？!?、,.…“”"'‘’（）()【】\[\]]/g, '')
@@ -380,7 +397,7 @@ export async function generateScreenComment(opts: {
       (ACTIVITY_LABEL[scene.activity] ?? ACTIVITY_LABEL.other) +
       (scene.detail ? '（' + scene.detail + '）' : '') +
       '。';
-    const system = opts.system + '\n' + common + '\n' + styleText + '\n' + sceneLine + recentLine + sameLine;
+    const system = opts.system + '\n' + common + '\n' + styleText + '\n' + sceneLine + recentLine + sameLine + idleLine;
     const gen = await callChat(
       [
         { role: 'system', content: system },
@@ -453,9 +470,10 @@ export async function generateScreenComment(opts: {
     common +
     '\n' +
     styleText +
-    '\n先判断主人在做什么（写代码 / 看代码 / 看报错 / 打游戏 / 看视频 / 看网页 / 刷评论 / 聊天 / 发呆），再按这个说；绝对不要把画面笼统说成“密密麻麻的字”或“很多东西”。' +
+    '\n先判断主人在做什么（写代码 / 看代码 / 看报错 / 打游戏 / 看视频 / 看网页 / 刷评论 / 学习 / 聊天 / 发呆），再按这个说；绝对不要把画面笼统说成“密密麻麻的字”或“很多东西”。' +
     recentLine +
-    sameLine;
+    sameLine +
+    idleLine;
   const fallback = await callChat(
     [
       { role: 'system', content: fallbackSystem },

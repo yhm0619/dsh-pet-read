@@ -792,6 +792,8 @@ export function saveUserConfig(
   if (ivb !== undefined && !topFieldValid('interactiveVisionBaseUrl', ivb)) return null;
   const isv = o.interactiveStyle;
   if (isv !== undefined && !topFieldValid('interactiveStyle', isv)) return null;
+  const iis = o.interactiveIntervalSec;
+  if (iis !== undefined && !topFieldValid('interactiveIntervalSec', iis)) return null;
   const cleanModel = (v: Record<string, unknown>): { provider: string; model: string } => ({
     provider: String(v.provider).trim(),
     model: String(v.model).trim(),
@@ -815,6 +817,7 @@ export function saveUserConfig(
   if (ivm !== undefined) outConfig.interactiveVisionModel = String(ivm).trim();
   if (ivb !== undefined) outConfig.interactiveVisionBaseUrl = String(ivb).trim();
   if (isv !== undefined) outConfig.interactiveStyle = isv;
+  if (iis !== undefined) outConfig.interactiveIntervalSec = Number(iis);
   // 透传保留：请求体未携带的顶层字段，从 existing（磁盘现有用户文件）原样带回——
   // 设置页只提交 pets(+全局开关+physics+模型+对话历史条数)，手改的 whisperPrompt/memes/... 借此保住。
   // 白名单字段只在「请求体传了」时才算白名单（已由上方写入）；未传时走这里透传磁盘旧值——
@@ -835,6 +838,7 @@ export function saveUserConfig(
   if (ivm !== undefined) bodyOwned.add('interactiveVisionModel');
   if (ivb !== undefined) bodyOwned.add('interactiveVisionBaseUrl');
   if (isv !== undefined) bodyOwned.add('interactiveStyle');
+  if (iis !== undefined) bodyOwned.add('interactiveIntervalSec');
   if (existing && typeof existing === 'object') {
     for (const key of Object.keys(existing)) {
       if (bodyOwned.has(key)) continue; // 白名单字段由请求体决定

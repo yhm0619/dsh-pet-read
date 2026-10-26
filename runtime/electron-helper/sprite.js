@@ -1858,7 +1858,7 @@ class PetSprite {
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ imagePath: cap.path }),
+          body: JSON.stringify({ imagePath: cap.path, sceneHash: cap.sceneHash }),
           signal: AbortSignal.timeout(90000),
         },
       );

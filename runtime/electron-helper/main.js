@@ -973,6 +973,31 @@ app.whenReady().then(() => {
       });
       const source = sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
       if (!source) return { ok: false, message: '没有可用的屏幕源' };
+      // 粗略画面指纹：去掉底部任务栏（时钟/宠物气泡），缩到 16×9 后做均值哈希。
+      // 目的不是精确比对，而是判断“屏幕是不是长时间没明显变化”，供宿主判发呆。
+      let sceneHash = '';
+      try {
+        const full = source.thumbnail.getSize();
+        const cropped = source.thumbnail.crop({
+          x: 0,
+          y: 0,
+          width: Math.max(1, full.width),
+          height: Math.max(1, Math.floor(full.height * 0.8)),
+        });
+        const small = cropped.resize({ width: 16, height: 9, quality: 'good' });
+        const bmp = small.toBitmap();
+        const lums = [];
+        let sum = 0;
+        for (let i = 0; i + 3 < bmp.length; i += 4) {
+          const lum = bmp[i] * 0.114 + bmp[i + 1] * 0.587 + bmp[i + 2] * 0.299;
+          lums.push(lum);
+          sum += lum;
+        }
+        const avg = lums.length ? sum / lums.length : 0;
+        sceneHash = lums.map((v) => (v >= avg ? '1' : '0')).join('');
+      } catch {
+        sceneHash = '';
+      }
       const jpeg = source.thumbnail.toJPEG(82);
       if (!jpeg || jpeg.length < 1024) return { ok: false, message: '截屏内容为空' };
       const file = path.join(
@@ -980,7 +1005,7 @@ app.whenReady().then(() => {
         'dsh-pet-screen-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.jpg',
       );
       await fsPromises.writeFile(file, jpeg);
-      return { ok: true, path: file };
+      return { ok: true, path: file, sceneHash };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }

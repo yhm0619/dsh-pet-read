@@ -677,6 +677,15 @@ export function apply(ctx: any): void {
   const interactiveLogPath = join(userRoot, 'interactive.json');
   // 同一只宠物的识屏串行：定时器与手动触发重叠时第二个请求直接 busy
   const interactiveInflight = new Set<string>();
+  // 画面指纹 → 首次出现时间：用于判断“屏幕太久没明显变化”（发呆/看入神）。
+  // Helper 用 16×9 均值哈希（去掉底部任务栏）上报；这里允许少量位差，避免鼠标/光标导致误判。
+  const interactiveIdle = new Map<string, { hash: string; since: number }>();
+  const hashDistance = (a: string, b: string): number => {
+    if (!a || !b || a.length !== b.length) return Number.POSITIVE_INFINITY;
+    let d = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d += 1;
+    return d;
+  };
   // 对话写操作串行队列：read-modify-write 排队执行，防两端同时对话时交错写盘
   let chatQueue: Promise<void> = Promise.resolve();
 
@@ -1725,6 +1734,18 @@ export function apply(ctx: any): void {
             obj: { ok: false, reason: 'bad-request', message: '缺少截图' },
           };
         }
+        const sceneHash = typeof parsed.sceneHash === 'string' ? parsed.sceneHash : '';
+        let idleSeconds = 0;
+        if (sceneHash) {
+          const prev = interactiveIdle.get(petId);
+          if (prev && hashDistance(prev.hash, sceneHash) <= 12) {
+            idleSeconds = Math.max(0, Math.round((Date.now() - prev.since) / 1000));
+          } else {
+            interactiveIdle.set(petId, { hash: sceneHash, since: Date.now() });
+          }
+        } else {
+          interactiveIdle.delete(petId);
+        }
         const log = await readInteractiveLog(interactiveLogPath);
         const recent = (Array.isArray(log[petId]?.messages) ? log[petId].messages : [])
           .slice(-5)
@@ -1734,6 +1755,7 @@ export function apply(ctx: any): void {
           imageDataUrl: dataUrl,
           settings,
           recent,
+          idleSeconds,
         });
         if (!result.ok) return { kind: 'json', status: 200, obj: result };
         const ts = Date.now();
